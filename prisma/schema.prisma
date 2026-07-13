@@ -1,0 +1,387 @@
+// Second Brain + PMS — Prisma schema
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+enum NodeType {
+  SEMANTIC
+  REFLECTIVE
+  PROCEDURAL
+  EPISODIC
+  THESIS
+  TOPIC
+  ENTITY
+  CLUSTER
+}
+
+enum EdgeType {
+  SUPPORTS
+  EXTENDS
+  INSTANTIATES
+  CONTRADICTS
+  REFINES
+  COMPOSES
+  MENTIONS
+  REQUIRES
+}
+
+enum TaskStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum Role {
+  MEMBER
+  ADMIN
+}
+
+// ----------------------------------------------------------------------------
+// Auth / multi-tenant (reserved — nullable everywhere for now)
+// ----------------------------------------------------------------------------
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users    User[]
+  notes    Note[]
+  projects Project[]
+}
+
+model User {
+  id          String     @id @default(cuid())
+  email       String     @unique
+  name        String?
+  image       String?
+  role        Role       @default(MEMBER)
+  createdAt   DateTime   @default(now())
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+
+  authoredNotes Note[]    @relation("NoteAuthor")
+  ownedProjects Project[] @relation("ProjectOwner")
+  assignedTasks Task[]    @relation("TaskAssignee")
+}
+
+// ----------------------------------------------------------------------------
+// Knowledge domain (graph nodes + edges)
+// ----------------------------------------------------------------------------
+model Note {
+  id        String   @id @default(cuid())
+  title     String
+  content   String   @default("")
+  summary   String?
+  type      NodeType @default(SEMANTIC)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorId    String?
+  author      User?      @relation("NoteAuthor", fields: [authorId], references: [id])
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+
+  topicId String?
+  topic   Topic?  @relation(fields: [topicId], references: [id])
+
+  // Stable per-document identity (usually the uploaded filename). All notes
+  // created from one markdown import share it, so re-importing the same file
+  // can delete-and-replace the previous version instead of duplicating it.
+  sourceKey String?
+
+  tags NoteTag[]
+
+  outgoingEdges Edge[] @relation("EdgeSource")
+  incomingEdges Edge[] @relation("EdgeTarget")
+
+  links NoteLink[]
+
+  @@index([type])
+  @@index([topicId])
+  @@index([sourceKey])
+}
+
+model Tag {
+  id    String  @id @default(cuid())
+  name  String  @unique
+  color String?
+
+  notes NoteTag[]
+}
+
+model NoteTag {
+  noteId String
+  tagId  String
+  note   Note   @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, tagId])
+  @@index([tagId])
+}
+
+model Topic {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  color       String?
+  parentId    String?
+  parent      Topic?  @relation("TopicHierarchy", fields: [parentId], references: [id])
+  children    Topic[] @relation("TopicHierarchy")
+
+  notes Note[]
+}
+
+model Edge {
+  id        String   @id @default(cuid())
+  sourceId  String
+  targetId  String
+  type      EdgeType @default(SUPPORTS)
+  weight    Float    @default(1)
+  note      String?
+  createdAt DateTime @default(now())
+
+  source Note @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  target Note @relation("EdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId, type])
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+// ----------------------------------------------------------------------------
+// Project management domain
+// ----------------------------------------------------------------------------
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  color       String?
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  ownerId     String?
+  owner       User?      @relation("ProjectOwner", fields: [ownerId], references: [id])
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+
+  tasks Task[]
+  links NoteLink[]
+
+  // PMS submenu domain (ported from spmf)
+  requirements     Requirement[]
+  requirementSpecs RequirementSpec[]
+  wbsItems         WBSItem[]
+  pmsTasks         PmsTask[]
+  deliverables     Deliverable[]
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  order       Float        @default(0)
+  dueDate     DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  assigneeId String?
+  assignee   User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  links NoteLink[]
+
+  @@index([projectId, status])
+}
+
+// ----------------------------------------------------------------------------
+// Cross-domain link: attach a knowledge note to a project or task
+// ----------------------------------------------------------------------------
+model NoteLink {
+  id        String   @id @default(cuid())
+  noteId    String
+  projectId String?
+  taskId    String?
+  relation  String?
+  createdAt DateTime @default(now())
+
+  note    Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@index([projectId])
+  @@index([taskId])
+}
+
+// ----------------------------------------------------------------------------
+// PMS submenu domain (ported from davidcho2026/spmf) — all scoped to a Project.
+// spmf stored dates as free-form strings; here they are proper DateTime? so the
+// import pipeline can bind extracted dates and the Gantt views can render them.
+// WBS/PmsTask reuse the existing TaskStatus / TaskPriority enums.
+// ----------------------------------------------------------------------------
+enum RequirementSpecStatus {
+  PENDING // 접수대기
+  RECEIVED // 접수
+  IN_PROGRESS // 진행
+  DONE // 완료
+  ON_HOLD // 보류
+  REJECTED // 반려
+}
+
+enum ImportanceLevel {
+  LOW // 하
+  MEDIUM // 중
+  HIGH // 상
+}
+
+// 요구사항 정의 (spmf: 과업 요구사항 / requirements-def)
+model Requirement {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sortOrder   Int      @default(0)
+  category    String   @default("기능")
+  classif     String?
+  rfpNo       String?
+  subNo       String?
+  name        String
+  subName     String?
+  detail      String?
+  acceptance  String   @default("수용")
+  output      String?
+  // Date fields added on top of spmf so imported dates land here directly.
+  requestDate DateTime?
+  dueDate     DateTime?
+  targetDate  DateTime?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// 요구사항 명세서 (spmf: requirements / RequirementSpec)
+model RequirementSpec {
+  id          String                @id @default(cuid())
+  projectId   String
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sortOrder   Int                   @default(0)
+  iaId        String?
+  systemType  String                @default("선택")
+  status      RequirementSpecStatus @default(PENDING)
+  menuPath    String?
+  name        String
+  detail      String?
+  review      String?
+  confirmed   Boolean               @default(false)
+  importance  ImportanceLevel       @default(MEDIUM)
+  files       String?
+  requester   String?
+  receiver    String?
+  requestDate DateTime?
+  dueDate     DateTime?
+  targetDate  DateTime?
+  progress    Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// WBS (일정/간트)
+model WBSItem {
+  id            String       @id @default(cuid())
+  projectId     String
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentId      String?
+  parent        WBSItem?     @relation("WBSHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children      WBSItem[]    @relation("WBSHierarchy")
+  code          String?
+  name          String
+  level         Int          @default(1)
+  phase         String?
+  assignee      String?
+  priority      TaskPriority @default(MEDIUM)
+  status        TaskStatus   @default(TODO)
+  progress      Int          @default(0)
+  startDate     DateTime?
+  endDate       DateTime?
+  planStartDate DateTime?
+  planEndDate   DateTime?
+  description   String?
+  sortOrder     Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// 업무 TASK (spmf: Task) — kept separate from the kanban `Task` model above.
+model PmsTask {
+  id          String       @id @default(cuid())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code        String?
+  name        String
+  phase       String?
+  assignee    String?
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(TODO)
+  progress    Int          @default(0)
+  startDate   DateTime?
+  endDate     DateTime?
+  description String?
+  sortOrder   Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// 산출물 관리 (spmf: Deliverable)
+model Deliverable {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sortOrder    Int      @default(0)
+  name         String
+  description  String?
+  templateFile String?
+  outputFile   String?
+  outputLink   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId, sortOrder])
+}
