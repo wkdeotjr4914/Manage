@@ -41,10 +41,11 @@ enum BidStatus {
 model BidNotice {
   id          String    @id @default(cuid())
 
-  bidNtceNo   String                 // 공고번호
-  bidNtceOrd  String    @default("0")// 공고차수 (재공고 구분)
-  bidNtceNm   String                 // 공고명
-  bsnsDivNm   String?                // 업무구분명 (용역 등)
+  bidNtceNo   String                  // 공고번호
+  bidNtceOrd  String    @default("000")// 공고차수 (3자리 문자열, 실측 "000")
+  bidNtceNm   String                  // 공고명
+  srvceDivNm  String?                 // 용역구분명 (실측 필드)
+  cntrctCnclsMthdNm String?           // 계약체결방법 (제한경쟁 등, 실측 필드)
 
   ntceInsttNm String?                // 공고기관명
   dminsttNm   String?                // 수요기관명
@@ -202,3 +203,21 @@ export const BID_KEYWORD_GROUPS = [
 - `.env`에 실제 키를 넣고 서버 액션으로 1회 수집 → 인증/파싱/upsert 정상 확인.
 - `npx tsc --noEmit`로 타입 검증, `/bids` 브라우저 확인(라이트/다크, 콘솔 하이드레이션).
 - 재수집 시 관심/제외 상태 보존 확인(dedup·upsert 정책).
+- 스키마 push 시 `String[]`(Postgres 배열) 타입이 EDB에서 생성되는지 확인(실패 시 콤마 문자열 폴백).
+
+## 14. API 실측 검증 결과 (2026-07-14, 사용자 키로 실호출)
+
+- **엔드포인트/키/JSON 응답 정상**: `resultCode "00"`. 용역 오퍼레이션
+  `getBidPblancListInfoServcPPSSrch`, `/ad/` 경로, `type=json` 모두 확정.
+- **필드 확정**: 응답 아이템 113개 필드. 사용 필드 실재 확인 — `bidNtceNo`,
+  `bidNtceOrd`("000"), `bidNtceNm`, `ntceInsttNm`, `dminsttNm`, `bidNtceDt`
+  ("2026-06-29 07:03:22" KST), `bidClseDt`, `opengDt`, `presmptPrce`/`asignBdgtAmt`(문자열),
+  **`bidNtceDtlUrl`**(나라장터 상세 링크), `srvceDivNm`, `cntrctCnclsMthdNm`, `rgstDt`.
+- **키워드 서버검색 유효**(최근 15일 용역): AI 274 · 인공지능 24 · 데이터 154 · 빅데이터 17 ·
+  플랫폼 136 · 자동화 12 · 챗봇 2 · 디지털전환 1 · 머신러닝 0. 키워드 없이는 totalCount 7,713.
+- **인코딩 결론**: 이 키는 64자 hex라 이중 인코딩 무관. **한글 키워드는 반드시 UTF-8
+  percent-encoding**으로 보내야 함(`fetch` + `URLSearchParams`가 정확히 처리). curl을 Windows
+  콘솔에서 쓸 때 한글 인자가 깨져 0건이 나온 것은 셸 문제이지 API 문제가 아님 — 구현은 fetch 사용.
+- **페이지네이션 필수**: 키워드별 totalCount가 numOfRows(999)를 넘을 수 있어 다음 페이지 순회.
+- **정제 필요 실증**: 한 공고가 여러 키워드에 걸림(dedup+`matchedKeywords` 타당) / "자동화"에
+  차량 임차 등 오탐 존재(EXCLUDED 상태 관리 타당).
