@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "highlight.js/styles/github-dark.css";
-import { Sidebar } from "@/components/shell/Sidebar";
-import { TopBar } from "@/components/shell/TopBar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -43,15 +41,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="min-h-full">
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <TopBar />
-            <main className="min-w-0 flex-1">{children}</main>
-          </div>
-        </div>
-      </body>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }

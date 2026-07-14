@@ -1,12 +1,15 @@
 // -----------------------------------------------------------------------------
-// Auth seam (not wired up yet).
+// Auth seam.
 //
-// This file is the SINGLE place authentication plugs in later. When we add
-// NextAuth / company SSO, only this file changes: `getCurrentUser` starts
-// returning the signed-in user, and `getScope` starts returning a real
-// `where` filter. Every server action and query already routes through
-// `getScope`, so no call sites need to change.
+// This file is the SINGLE place authentication plugs in. `getCurrentUser` reads
+// the session cookie (see `session.ts`); `getScope` derives the query scope from
+// it. Every server action and query already routes through `getScope`, so no
+// call sites change. Multi-tenant isolation is still off (`where: {}`), but the
+// scope now carries the real signed-in `userId`/`workspaceId`.
 // -----------------------------------------------------------------------------
+
+import { redirect } from "next/navigation";
+import { getSessionUser } from "@/server/session";
 
 export type CurrentUser = {
   id: string;
@@ -17,14 +20,14 @@ export type CurrentUser = {
 } | null;
 
 export async function getCurrentUser(): Promise<CurrentUser> {
-  // TODO: replace with real session lookup (NextAuth/Auth.js).
-  return null;
+  return getSessionUser();
 }
 
 /**
- * Access scope for list/mutation queries. Today it's an empty (no-op) filter,
- * so the app behaves as a single shared workspace. Later this returns
- * `{ where: { workspaceId } }` (or authorId) to enforce tenant isolation.
+ * Access scope for list/mutation queries. `where` is still an empty (no-op)
+ * filter — the app behaves as a single shared workspace — but `userId`/
+ * `workspaceId` now reflect the signed-in user. Later, flip `where` to
+ * `{ workspaceId }` (or authorId) to enforce tenant isolation.
  */
 export async function getScope() {
   const user = await getCurrentUser();
@@ -33,4 +36,19 @@ export async function getScope() {
     workspaceId: user?.workspaceId ?? null,
     where: {} as Record<string, never>,
   };
+}
+
+/** Require a signed-in user; redirect to /login otherwise. */
+export async function requireUser(): Promise<NonNullable<CurrentUser>> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  return user;
+}
+
+/** Require an ADMIN; redirect to /login (anon) or / (non-admin) otherwise. */
+export async function requireAdmin(): Promise<NonNullable<CurrentUser>> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  if (user.role !== "ADMIN") redirect("/");
+  return user;
 }

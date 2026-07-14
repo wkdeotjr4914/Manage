@@ -83,3 +83,30 @@ export function formatEpoch(ms: number): string {
 export function todayDateInput(): string {
   return toDateInputValue(new Date(Date.now()));
 }
+
+/**
+ * 나라장터 응답의 "YYYY-MM-DD HH:MM:SS"(KST) 문자열을 Date로 파싱. 초는 선택.
+ * 형식이 어긋나거나 비면 null. 모듈 스코프라 render 밖(서버 수집)에서만 호출.
+ */
+export function parseG2bDateTime(value: string | null | undefined): Date | null {
+  const v = value?.trim();
+  if (!v) return null;
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const dt = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s ?? "00"}+09:00`);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+/** Date를 KST 기준 "YYYY.MM.DD HH:mm"로 표시. 값이 없으면 빈 문자열. */
+export function formatDateTime(date: Date | string | null | undefined): string {
+  if (!date) return "";
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "";
+  const k = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  return `${k.getUTCFullYear()}.${String(k.getUTCMonth() + 1).padStart(2, "0")}.${String(
+    k.getUTCDate(),
+  ).padStart(2, "0")} ${String(k.getUTCHours()).padStart(2, "0")}:${String(
+    k.getUTCMinutes(),
+  ).padStart(2, "0")}`;
+}

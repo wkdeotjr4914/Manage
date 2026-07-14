@@ -101,7 +101,9 @@ export function ImportWorkbench({
   const [mode, setMode] = useState<Mode>(aiAvailable ? "ai" : "heuristic");
   const [topicName, setTopicName] = useState("");
   const [tagText, setTagText] = useState("");
-  const [projectMode, setProjectMode] = useState("auto");
+  // Import attaches documents to an *existing* project only — no auto-create.
+  // Default to the most recent project, or "none" when there are none yet.
+  const [projectMode, setProjectMode] = useState(projects[0]?.id ?? "none");
 
   const [analyzed, setAnalyzed] = useState<Analyzed[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -170,8 +172,7 @@ export function ImportWorkbench({
     }
     const extraTags = tagText.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
     const skipTasks = projectMode === "none";
-    const projectId =
-      projectMode === "auto" || projectMode === "none" ? undefined : projectMode;
+    const projectId = projectMode === "none" ? undefined : projectMode;
 
     startCommit(async () => {
       const totals = { notes: 0, tasks: 0, edges: 0 };
@@ -415,14 +416,22 @@ export function ImportWorkbench({
         <div>
           <Label>프로젝트 (문서를 귀속시킬 곳)</Label>
           <Select value={projectMode} onChange={(e) => setProjectMode(e.target.value)}>
-            <option value="auto">새 프로젝트 (프론트매터 project 또는 문서 제목)</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
-                기존: {p.name}
+                {p.name}
               </option>
             ))}
             <option value="none">프로젝트에 연결 안 함</option>
           </Select>
+          {projects.length === 0 && (
+            <p className="mt-1 text-[11px] text-muted-2">
+              등록된 프로젝트가 없습니다. 먼저{" "}
+              <Link href="/projects" className="underline">
+                프로젝트
+              </Link>
+              를 만든 뒤 가져오세요.
+            </p>
+          )}
         </div>
 
         <div>

@@ -32,6 +32,8 @@ export const TASK_STATUS_VALUES = [
 
 export const TASK_PRIORITY_VALUES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
+export const ROLE_VALUES = ["MEMBER", "ADMIN"] as const;
+
 export const noteSchema = z.object({
   title: z.string().trim().min(1, "제목을 입력하세요.").max(200),
   content: z.string().max(20000).optional().default(""),
@@ -80,6 +82,45 @@ export const taskSchema = z.object({
 export type NoteInput = z.infer<typeof noteSchema>;
 export type EdgeInput = z.infer<typeof edgeSchema>;
 export type TaskInput = z.infer<typeof taskSchema>;
+
+// ----------------------------------------------------------------------------
+// Auth
+// ----------------------------------------------------------------------------
+// Normalize email once here (trim + lowercase) so lookups and the unique
+// constraint stay consistent.
+const emailField = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.email("올바른 이메일 형식이 아닙니다."));
+
+export const loginSchema = z.object({
+  email: emailField,
+  password: z.string().min(1, "비밀번호를 입력하세요."),
+});
+
+export const createUserSchema = z.object({
+  email: emailField,
+  name: z.string().trim().min(1, "이름을 입력하세요.").max(60),
+  password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다.").max(200),
+  role: z.enum(ROLE_VALUES).default("MEMBER"),
+});
+
+// 수정 폼: 생성과 달리 비밀번호는 선택. 빈 문자열이면 기존 비밀번호 유지,
+// 값이 있으면 8자 이상이어야 한다.
+export const updateUserSchema = z.object({
+  email: emailField,
+  name: z.string().trim().min(1, "이름을 입력하세요.").max(60),
+  role: z.enum(ROLE_VALUES),
+  password: z
+    .string()
+    .max(200)
+    .refine((v) => v === "" || v.length >= 8, "비밀번호는 8자 이상이어야 합니다."),
+});
+
+export type LoginInput = z.infer<typeof loginSchema>;
+export type CreateUserInput = z.infer<typeof createUserSchema>;
+export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
 // ----------------------------------------------------------------------------
 // PMS submenu domain (ported from spmf). Date fields arrive as `YYYY-MM-DD`

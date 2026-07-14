@@ -1,13 +1,18 @@
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { hashPassword } from "../src/lib/password";
+
+// Shared demo password for the seeded accounts (email로 로그인, 비번은 동일).
+const DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD ?? "password123!";
 
 const connectionString = process.env.DATABASE_URL;
 const schema = connectionString
   ? new URL(connectionString).searchParams.get("schema") ?? undefined
   : undefined;
 const adapter = new PrismaPg(
-  { connectionString },
+  // Match src/server/db.ts: force ISO datestyle on the EDB connection.
+  { connectionString, options: "-c datestyle=ISO,MDY" },
   schema ? { schema } : undefined,
 );
 const prisma = new PrismaClient({ adapter });
@@ -23,6 +28,7 @@ async function main() {
   await prisma.note.deleteMany();
   await prisma.tag.deleteMany();
   await prisma.topic.deleteMany();
+  await prisma.session.deleteMany();
   await prisma.user.deleteMany();
   await prisma.workspace.deleteMany();
 
@@ -31,12 +37,16 @@ async function main() {
     data: { name: "Acme AI" },
   });
 
+  // Hash once, reuse for all demo users.
+  const demoHash = await hashPassword(DEMO_PASSWORD);
+
   const [alex, jiwon, minjun] = await Promise.all([
     prisma.user.create({
       data: {
         email: "alex@acme.ai",
         name: "알렉스",
         role: "ADMIN",
+        passwordHash: demoHash,
         workspaceId: workspace.id,
       },
     }),
@@ -45,6 +55,7 @@ async function main() {
         email: "jiwon@acme.ai",
         name: "지원",
         role: "MEMBER",
+        passwordHash: demoHash,
         workspaceId: workspace.id,
       },
     }),
@@ -53,6 +64,7 @@ async function main() {
         email: "minjun@acme.ai",
         name: "민준",
         role: "MEMBER",
+        passwordHash: demoHash,
         workspaceId: workspace.id,
       },
     }),
@@ -469,6 +481,9 @@ async function main() {
     tasks: await prisma.task.count(),
   };
   console.log("✅ 시드 완료:", counts);
+  console.log(
+    `🔑 데모 로그인: alex@acme.ai (관리자) / 비밀번호 "${DEMO_PASSWORD}"`,
+  );
 }
 
 main()

@@ -9,21 +9,35 @@ import {
   Tags,
   FolderKanban,
   Upload,
+  Gavel,
   Brain,
+  Users,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  exact?: boolean;
+};
+
+const NAV: NavItem[] = [
   { href: "/", label: "대시보드", icon: LayoutDashboard, exact: true },
   { href: "/graph", label: "지식 그래프", icon: Network },
   { href: "/notes", label: "노트", icon: StickyNote },
   { href: "/tags", label: "태그 · 토픽", icon: Tags },
   { href: "/projects", label: "프로젝트", icon: FolderKanban },
+  { href: "/bids", label: "입찰공고", icon: Gavel },
   { href: "/import", label: "가져오기", icon: Upload },
 ];
 
-export function Sidebar() {
+const ADMIN_NAV: NavItem = { href: "/admin/users", label: "사용자 관리", icon: Users };
+
+export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
+  const items = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-surface md:flex">
@@ -40,7 +54,7 @@ export function Sidebar() {
       </Link>
 
       <nav className="flex flex-col gap-1 px-3 py-2">
-        {NAV.map(({ href, label, icon: Icon, exact }) => {
+        {items.map(({ href, label, icon: Icon, exact }) => {
           const active = exact ? pathname === href : pathname.startsWith(href);
           return (
             <Link

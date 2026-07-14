@@ -74,18 +74,35 @@ model Workspace {
 }
 
 model User {
-  id          String     @id @default(cuid())
-  email       String     @unique
-  name        String?
-  image       String?
-  role        Role       @default(MEMBER)
-  createdAt   DateTime   @default(now())
-  workspaceId String?
-  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String?
+  image        String?
+  // scrypt hash ("scrypt$N$r$p$<saltB64>$<hashB64>"). Nullable so SSO/legacy
+  // users without a local password can still exist.
+  passwordHash String?
+  role         Role       @default(MEMBER)
+  createdAt    DateTime   @default(now())
+  workspaceId  String?
+  workspace    Workspace? @relation(fields: [workspaceId], references: [id])
 
   authoredNotes Note[]    @relation("NoteAuthor")
   ownedProjects Project[] @relation("ProjectOwner")
   assignedTasks Task[]    @relation("TaskAssignee")
+  sessions      Session[]
+}
+
+// Server-side sessions: opaque random id stored in DB, signed (HMAC) into an
+// httpOnly cookie. Lets us revoke on logout / role change instead of trusting a
+// self-contained JWT.
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 // ----------------------------------------------------------------------------
@@ -384,4 +401,52 @@ model Deliverable {
   updatedAt    DateTime @updatedAt
 
   @@index([projectId, sortOrder])
+}
+
+// ----------------------------------------------------------------------------
+// 입찰(Bid) 도메인 — 나라장터에서 수집한 용역 입찰공고 (독립 도메인)
+// (bidNtceNo, bidNtceOrd) 조합이 논리적 유일키. 재수집은 upsert로 중복 방지하되
+// 사용자가 지정한 status/memo는 보존한다.
+// ----------------------------------------------------------------------------
+enum BidStatus {
+  NEW // 신규 수집
+  INTERESTED // 관심
+  EXCLUDED // 제외
+}
+
+model BidNotice {
+  id String @id @default(cuid())
+
+  bidNtceNo         String // 공고번호
+  bidNtceOrd        String  @default("000") // 공고차수 (실측 3자리 문자열)
+  bidNtceNm         String // 공고명
+  srvceDivNm        String? // 용역구분명
+  cntrctCnclsMthdNm String? // 계약체결방법 (제한경쟁 등)
+
+  ntceInsttNm String? // 공고기관명
+  dminsttNm   String? // 수요기관명
+
+  bidNtceDt DateTime? // 공고일시
+  bidClseDt DateTime? // 입찰마감일시
+  opengDt   DateTime? // 개찰일시
+
+  presmptPrce  String? // 추정가격(원본 문자열)
+  asignBdgtAmt String? // 배정예산금액(원본 문자열)
+
+  bidNtceDtlUrl String? // 나라장터 상세 URL
+
+  matchedKeywords String[] // 매칭된 회사 키워드 그룹 라벨
+  status          BidStatus @default(NEW)
+  memo            String? // 사내 메모
+
+  raw Json? // 원본 응답 아이템(디버깅/필드 보강용)
+
+  collectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspaceId String?
+
+  @@unique([bidNtceNo, bidNtceOrd])
+  @@index([status])
+  @@index([bidClseDt])
+  @@index([bidNtceDt])
 }

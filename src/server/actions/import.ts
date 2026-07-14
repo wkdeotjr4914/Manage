@@ -98,8 +98,9 @@ export async function commitImport(input: {
 
   // Resolve the project this document attaches to first — the topic and the
   // note links both depend on it. skipTasks ("프로젝트에 연결 안 함") opts out.
+  // Import only ever attaches to an *existing* project — it never creates one:
   //   1) an explicitly chosen existing project, else
-  //   2) a name from the UI / frontmatter / document title (find-or-create).
+  //   2) an existing project matched by frontmatter/title name (not created).
   let projectId: string | null = null;
   let resolvedProjectName: string | null = null;
   if (!input.skipTasks) {
@@ -120,22 +121,12 @@ export async function commitImport(input: {
       if (projectName) {
         const existing = await prisma.project.findFirst({
           where: { name: projectName, workspaceId: scope.workspaceId },
-          select: { id: true },
+          select: { id: true, name: true },
         });
-        projectId = existing
-          ? existing.id
-          : (
-              await prisma.project.create({
-                data: {
-                  name: projectName,
-                  description: `${plan.documentTitle} 문서에서 가져옴`,
-                  ownerId: scope.userId,
-                  workspaceId: scope.workspaceId,
-                },
-                select: { id: true },
-              })
-            ).id;
-        resolvedProjectName = projectName;
+        if (existing) {
+          projectId = existing.id;
+          resolvedProjectName = existing.name;
+        }
       }
     }
   }
