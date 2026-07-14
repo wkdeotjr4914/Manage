@@ -403,14 +403,20 @@ function mergeMetadata(plan: ImportPlan, meta: ExtractedMetadata): ImportPlan {
   };
 }
 
-export async function analyzeAI(
-  markdown: string,
+type GeminiPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
+/**
+ * Shared Gemini call: send `parts` as the user turn and validate the structured
+ * JSON response into an ImportPlan. Backs both the text and PDF entry points.
+ */
+async function runGemini(
+  parts: GeminiPart[],
   fallbackTitle: string,
 ): Promise<ImportPlan> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
-
-  const meta = extractMetadata(markdown);
   // gemini-2.0-flash는 서비스 종료(retired)됨. flash-latest 별칭이 최신 Flash를 가리킨다.
   const model = process.env.IMPORT_AI_MODEL || "gemini-flash-lite-latest";
 
@@ -424,16 +430,7 @@ export async function analyzeAI(
         signal: AbortSignal.timeout(60_000),
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM }] },
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `다음 문서를 구조화해 주세요.\n\n<document filename="${fallbackTitle.replace(/"/g, "'")}">\n${meta.body}\n</document>`,
-                },
-              ],
-            },
-          ],
+          contents: [{ role: "user", parts }],
           generationConfig: {
             responseMimeType: "application/json",
             responseSchema: RESPONSE_SCHEMA,
@@ -481,6 +478,41 @@ export async function analyzeAI(
     console.error("[import/ai] JSON 파싱 실패:", text.slice(0, 500));
     throw new Error("AI 응답을 JSON으로 해석하지 못했습니다.");
   }
+  return coercePlan(raw, fallbackTitle);
+}
 
-  return mergeMetadata(coercePlan(raw, fallbackTitle), meta);
+/** Structure a markdown/text document; frontmatter + hashtags win over model inference. */
+export async function analyzeAI(
+  markdown: string,
+  fallbackTitle: string,
+): Promise<ImportPlan> {
+  const meta = extractMetadata(markdown);
+  const plan = await runGemini(
+    [
+      {
+        text: `다음 문서를 구조화해 주세요.\n\n<document filename="${fallbackTitle.replace(/"/g, "'")}">\n${meta.body}\n</document>`,
+      },
+    ],
+    fallbackTitle,
+  );
+  return mergeMetadata(plan, meta);
+}
+
+/**
+ * Structure a PDF by handing the raw bytes to Gemini's multimodal input
+ * (`inlineData`). No text extraction — Gemini reads layout/tables and OCRs
+ * scanned pages. AI-mode only; there is no heuristic fallback for PDF.
+ */
+export async function analyzeAIFromPdf(
+  base64: string,
+  mimeType: string,
+  fallbackTitle: string,
+): Promise<ImportPlan> {
+  return runGemini(
+    [
+      { text: `다음 PDF 문서를 구조화해 주세요. 파일명: ${fallbackTitle.replace(/"/g, "'")}` },
+      { inlineData: { mimeType: mimeType || "application/pdf", data: base64 } },
+    ],
+    fallbackTitle,
+  );
 }

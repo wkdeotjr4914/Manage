@@ -90,6 +90,10 @@ model User {
   ownedProjects Project[] @relation("ProjectOwner")
   assignedTasks Task[]    @relation("TaskAssignee")
   sessions      Session[]
+  googleAccount   GoogleAccount?
+  oauthStates     OAuthState[]
+  collectedMail   CollectedMail[]
+  gmailLabelRules GmailLabelRule[]
 }
 
 // Server-side sessions: opaque random id stored in DB, signed (HMAC) into an
@@ -217,6 +221,7 @@ model Project {
   wbsItems         WBSItem[]
   pmsTasks         PmsTask[]
   deliverables     Deliverable[]
+  gmailLabelRules  GmailLabelRule[]
 }
 
 model Task {
@@ -449,4 +454,139 @@ model BidNotice {
   @@index([status])
   @@index([bidClseDt])
   @@index([bidNtceDt])
+}
+
+// ----------------------------------------------------------------------------
+// 구글 연동 (사용자별 OAuth 2.0) — Gmail 수집 · Calendar 내보내기 · Sheets 리포트
+// 사용자당 구글 계정 1개(@unique userId). refresh/access 토큰은 평문 저장 금지 —
+// AES-256-GCM 암호문(src/lib/oauth-crypto.ts)으로 저장한다. 접근 취소 시 REVOKED.
+// ----------------------------------------------------------------------------
+enum GoogleAccountStatus {
+  CONNECTED // 정상 연결
+  REVOKED // 구글에서 접근 취소됨(재연결 필요)
+}
+
+model GoogleAccount {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  googleEmail String? // 연결된 구글 계정(표시용)
+  scope       String? // 부여된 스코프(공백 구분)
+
+  accessTokenEnc  String? // AES-256-GCM 암호문(access token)
+  refreshTokenEnc String // AES-256-GCM 암호문(refresh token, 필수)
+  expiryDate      DateTime? // access token 만료 시각
+
+  status GoogleAccountStatus @default(CONNECTED)
+
+  gmailSyncedAt      DateTime? // 마지막 Gmail 수집 시각(표시용)
+  gmailLastHistoryId String? // 향후 History API 고도화용 예약
+  // (구버전 단일 설정 — 이제 GmailLabelRule(N개)로 대체. 미사용, 하위호환 위해 유지)
+  gmailProjectId     String?
+  gmailLabel         String?
+
+  // 시나리오별 대상 리소스 식별자.
+  sheetsSpreadsheetId String? // PMS 리포트 대상 스프레드시트
+  calendarId          String? // 전용 "PMS 일정" 캘린더
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 마감일→캘린더 단방향 동기화의 멱등 매핑. (엔티티,날짜필드) 하나당 이벤트 1개.
+model GoogleCalendarLink {
+  id            String   @id @default(cuid())
+  userId        String
+  entityType    String // "TASK" | "WBS" | "PMS_TASK" | "REQUIREMENT" | "REQUIREMENT_SPEC" | "PROJECT"
+  entityId      String
+  dateField     String // "dueDate" | "endDate" | "targetDate" | "startDate" ...
+  googleEventId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, entityType, entityId, dateField])
+  @@index([userId])
+}
+
+// OAuth Authorization Code 흐름의 CSRF state. Session 모델과 동형으로, 불투명 랜덤
+// id를 코드에서 생성해 저장하고 콜백에서 1회용으로 소비(조회 후 즉시 삭제)한다.
+// 쿠키 대신 DB로 관리해 서버측 폐기/검증이 가능하다.
+model OAuthState {
+  id        String   @id // Google로 보내는 불투명 랜덤 state 토큰(코드 생성)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider  String   @default("google")
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// 구글 OAuth "앱(클라이언트)" 자격증명 — 사용자별이 아니라 앱 전역 1행(provider PK).
+// 모든 사용자가 이 한 앱을 공유하고, 사용자 구분은 GoogleAccount(사용자별 토큰)가 담당.
+// ADMIN이 설정 화면에서 입력하며 client secret은 AES-256-GCM 암호문으로 저장한다.
+// .env의 GOOGLE_* 는 이 행이 없을 때의 폴백으로만 쓰인다(config.ts).
+model OAuthClientConfig {
+  provider        String   @id // "google"
+  clientId        String
+  clientSecretEnc String // AES-256-GCM 암호문
+  redirectUri     String
+  updatedBy       String? // 마지막 수정 ADMIN userId
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Gmail에서 수집한 메일 — 사용자별로 격리(각자 자기 메일함). BidNotice와 같은
+// "수집→선별" 도메인: (userId, messageId)가 유일키라 재수집은 upsert로 중복 방지하되
+// 사용자가 지정한 status/memo/noteId는 보존한다. 필요 시 노트로 변환(noteId 연결).
+enum CollectedMailStatus {
+  NEW // 신규 수집
+  READ // 확인함
+  ARCHIVED // 보관/제외
+}
+
+model CollectedMail {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messageId String // Gmail 메시지 id
+  threadId  String?
+  subject   String    @default("(제목 없음)")
+  fromAddr  String    @default("")
+  toAddr    String?
+  snippet   String? // 미리보기(구글 제공)
+  body      String    @default("") // 본문(text)
+  internalDate DateTime? // 메일 수신 시각
+  labels    String? // 매칭된 검색 키워드(참고)
+
+  status    CollectedMailStatus @default(NEW)
+  memo      String?
+  noteId    String? // 노트로 변환한 경우 연결
+  projectId String? // 노트 변환 시 연결할 프로젝트(수집 당시 규칙에서 결정)
+
+  collectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, messageId])
+  @@index([userId, status])
+  @@index([userId, internalDate])
+}
+
+// Gmail 라벨 → 프로젝트 매핑 규칙(사용자당 N개). 수집 시 모든 규칙을 순회하며 각
+// 라벨의 메일을 CollectedMail로 저장하고, 해당 규칙의 projectId를 메일에 심어
+// 노트 변환 시 그 프로젝트로 연결한다. 한 사용자 안에서 라벨은 유일.
+model GmailLabelRule {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, label])
+  @@index([userId])
 }

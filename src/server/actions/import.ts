@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { getScope } from "@/server/auth";
 import { analyzeHeuristic } from "@/server/import/heuristic";
-import { analyzeAI, isAiAvailable } from "@/server/import/ai";
+import { analyzeAI, analyzeAIFromPdf, isAiAvailable } from "@/server/import/ai";
 import { parseDateInput } from "@/lib/utils";
 import type { ImportPlan } from "@/lib/import";
 
@@ -12,15 +12,38 @@ type AnalyzeResult =
   | { ok: true; plan: ImportPlan }
   | { ok: false; error: string };
 
-export async function analyzeImport(input: {
-  markdown: string;
-  filename?: string;
-  mode: "heuristic" | "ai";
-}): Promise<AnalyzeResult> {
+export async function analyzeImport(
+  input:
+    | { kind?: "text"; markdown: string; filename?: string; mode: "heuristic" | "ai" }
+    | { kind: "pdf"; base64: string; mimeType: string; filename?: string },
+): Promise<AnalyzeResult> {
+  // PDF: AI-only. Raw bytes go straight to Gemini's multimodal input; there is
+  // no heuristic fallback because there is no extracted text.
+  if (input.kind === "pdf") {
+    if (!isAiAvailable()) {
+      return { ok: false, error: "PDF 가져오기는 GEMINI_API_KEY(AI 분석)가 필요합니다." };
+    }
+    if (!input.base64) return { ok: false, error: "PDF 내용이 비어 있습니다." };
+    const fallbackTitle =
+      input.filename?.replace(/\.pdf$/i, "").trim() || "가져온 문서";
+    try {
+      const plan = await analyzeAIFromPdf(input.base64, input.mimeType, fallbackTitle);
+      if (!plan.notes.length) {
+        return { ok: false, error: "AI가 노트를 추출하지 못했습니다." };
+      }
+      return { ok: true, plan };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "분석에 실패했습니다.",
+      };
+    }
+  }
+
   const md = input.markdown?.trim();
   if (!md) return { ok: false, error: "내용이 비어 있습니다." };
   const fallbackTitle =
-    input.filename?.replace(/\.mdx?$/i, "").trim() || "가져온 문서";
+    input.filename?.replace(/\.\w+$/i, "").trim() || "가져온 문서";
 
   try {
     if (input.mode === "ai") {

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { NODE_TYPES } from "@/lib/theme";
 import { cn, formatDate } from "@/lib/utils";
 import type { ImportPlan, ImportSource } from "@/lib/import";
+import { extractFile } from "@/lib/import-extract";
 import {
   analyzeImport,
   commitImport,
@@ -107,6 +108,7 @@ export function ImportWorkbench({
 
   const [analyzed, setAnalyzed] = useState<Analyzed[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
   const [savePms, setSavePms] = useState<Record<PmsDomainKey, boolean>>({
     requirements: true,
     requirementSpecs: true,
@@ -123,19 +125,41 @@ export function ImportWorkbench({
     pms: PmsCounts;
   } | null>(null);
 
+  const hasPdf = files.some((f) => f.kind === "pdf");
+  // PDF has no extractable text, so it must use AI; force it when a PDF is queued.
+  const effectiveMode: Mode = hasPdf ? "ai" : mode;
+
   async function onFiles(list: FileList | null) {
     if (!list?.length) return;
-    const read = await Promise.all(
-      Array.from(list).map(async (f) => ({ name: f.name, markdown: await f.text() })),
-    );
-    setFiles((prev) => [...prev, ...read]);
-    setAnalyzed(null);
-    setResult(null);
+    setError(null);
+    setProcessing(true);
+    const added: ImportSource[] = [];
+    const errs: string[] = [];
+    for (const f of Array.from(list)) {
+      try {
+        const src = await extractFile(f);
+        if (src.kind === "pdf" && !aiAvailable) {
+          errs.push(`PDF는 AI 분석이 필요합니다(GEMINI_API_KEY 미설정): ${f.name}`);
+          continue;
+        }
+        added.push(src);
+      } catch (e) {
+        errs.push(e instanceof Error ? e.message : `처리 실패: ${f.name}`);
+      }
+    }
+    setProcessing(false);
+    if (added.length) {
+      setFiles((prev) => [...prev, ...added]);
+      setAnalyzed(null);
+      setResult(null);
+    }
+    if (errs.length) setError(errs.join("\n"));
   }
 
   function sources(): ImportSource[] {
     if (files.length) return files;
-    if (paste.trim()) return [{ name: "붙여넣은 문서", markdown: paste }];
+    if (paste.trim())
+      return [{ name: "붙여넣은 문서", kind: "text", markdown: paste }];
     return [];
   }
 
@@ -150,11 +174,20 @@ export function ImportWorkbench({
     startAnalyze(async () => {
       const out: Analyzed[] = [];
       for (const s of srcs) {
-        const res = await analyzeImport({
-          markdown: s.markdown,
-          filename: s.name,
-          mode,
-        });
+        const res =
+          s.kind === "pdf"
+            ? await analyzeImport({
+                kind: "pdf",
+                base64: s.base64,
+                mimeType: s.mimeType,
+                filename: s.name,
+              })
+            : await analyzeImport({
+                kind: "text",
+                markdown: s.markdown,
+                filename: s.name,
+                mode: effectiveMode,
+              });
         out.push(
           res.ok ? { source: s, plan: res.plan } : { source: s, error: res.error },
         );
@@ -320,23 +353,27 @@ export function ImportWorkbench({
       {/* input */}
       <div className="flex flex-col gap-3">
         <div
-          onClick={() => fileRef.current?.click()}
+          onClick={() => !processing && fileRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            onFiles(e.dataTransfer.files);
+            if (!processing) onFiles(e.dataTransfer.files);
           }}
           className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface-2/40 px-6 py-10 text-center transition-colors hover:bg-surface-2"
         >
           <Upload className="size-6 text-muted-2" />
           <p className="text-sm font-medium text-foreground">
-            마크다운(.md) 파일을 끌어다 놓거나 클릭해서 선택
+            마크다운·엑셀·PDF·워드 파일을 끌어다 놓거나 클릭해서 선택
           </p>
-          <p className="text-xs text-muted-2">여러 개 선택 가능 · 회의록·문서</p>
+          <p className="text-xs text-muted-2">
+            {processing
+              ? "파일 처리 중…"
+              : ".md · .txt · .csv · .xlsx · .docx · .pdf · 여러 개 선택 가능"}
+          </p>
           <input
             ref={fileRef}
             type="file"
-            accept=".md,.markdown,.mdx,text/markdown"
+            accept=".md,.markdown,.mdx,.txt,.csv,.xlsx,.xls,.docx,.pdf"
             multiple
             className="hidden"
             onChange={(e) => onFiles(e.target.files)}
@@ -352,6 +389,11 @@ export function ImportWorkbench({
               >
                 <FileText className="size-3.5 text-muted-2" />
                 {f.name}
+                {f.kind === "pdf" && (
+                  <span className="rounded bg-primary/15 px-1 text-[10px] font-semibold text-primary">
+                    PDF·AI
+                  </span>
+                )}
                 <button
                   onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                   className="rounded p-0.5 text-muted-2 hover:text-danger"
@@ -387,7 +429,7 @@ export function ImportWorkbench({
               disabled={!aiAvailable}
               className={cn(
                 "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
-                mode === "ai"
+                effectiveMode === "ai"
                   ? "bg-primary/20 text-foreground ring-1 ring-primary/30"
                   : "text-muted hover:text-foreground",
               )}
@@ -396,9 +438,10 @@ export function ImportWorkbench({
             </button>
             <button
               onClick={() => setMode("heuristic")}
+              disabled={hasPdf}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
-                mode === "heuristic"
+                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
+                effectiveMode === "heuristic"
                   ? "bg-primary/20 text-foreground ring-1 ring-primary/30"
                   : "text-muted hover:text-foreground",
               )}
@@ -406,6 +449,11 @@ export function ImportWorkbench({
               <Wand2 className="size-3.5" /> 규칙 기반
             </button>
           </div>
+          {hasPdf && (
+            <p className="mt-1 text-[11px] text-muted-2">
+              PDF가 포함되어 AI 분석으로 진행합니다. (엑셀·워드도 AI 권장)
+            </p>
+          )}
           {!aiAvailable && (
             <p className="mt-1 text-[11px] text-muted-2">
               AI 모드는 GEMINI_API_KEY 설정 시 켜집니다.
@@ -452,7 +500,9 @@ export function ImportWorkbench({
         </div>
       </div>
 
-      {error && <p className="text-sm text-danger">{error}</p>}
+      {error && (
+        <p className="whitespace-pre-line text-sm text-danger">{error}</p>
+      )}
 
       {/* PMS binding — pick which extracted domains to write into the project */}
       {analyzed && pmsTotal > 0 && (

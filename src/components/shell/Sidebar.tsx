@@ -12,6 +12,8 @@ import {
   Gavel,
   Brain,
   Users,
+  Plug,
+  Mail,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,7 +32,9 @@ const NAV: NavItem[] = [
   { href: "/tags", label: "태그 · 토픽", icon: Tags },
   { href: "/projects", label: "프로젝트", icon: FolderKanban },
   { href: "/bids", label: "입찰공고", icon: Gavel },
+  { href: "/mails", label: "수집 메일", icon: Mail },
   { href: "/import", label: "가져오기", icon: Upload },
+  { href: "/settings/integrations", label: "연동", icon: Plug },
 ];
 
 const ADMIN_NAV: NavItem = { href: "/admin/users", label: "사용자 관리", icon: Users };

@@ -10,6 +10,9 @@ export const BID_KEYWORD_GROUPS: BidKeywordGroup[] = [
   { key: "ax", label: "AX·DX", terms: ["AX", "DX", "디지털전환", "지능형", "자동화", "RPA"] },
   { key: "data", label: "데이터", terms: ["데이터", "빅데이터", "데이터레이크", "분석플랫폼"] },
   { key: "chatbot", label: "챗봇·NLP", terms: ["챗봇", "상담", "대화형", "자연어", "음성인식"] },
+  { key: "homepage", label: "홈페이지", terms: ["홈페이지", "웹사이트", "누리집", "포털", "리뉴얼"] },
+  { key: "advancement", label: "고도화", terms: ["고도화", "재구축", "개편"] },
+  { key: "feature", label: "기능개선", terms: ["기능개선", "기능개발", "기능추가"] },
 ];
 
 /** 공고명에 포함된 term이 있는 그룹의 label 배열을 반환. */

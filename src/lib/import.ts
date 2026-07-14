@@ -104,4 +104,10 @@ export type ImportPlan = {
   deliverables?: PlanDeliverable[];
 };
 
-export type ImportSource = { name: string; markdown: string };
+// A document queued for import. Text-based files (md/txt/csv/xlsx/docx) are
+// extracted to markdown on the client and travel as `kind:"text"`. PDFs are not
+// parsed client-side — their raw bytes ride along as base64 (`kind:"pdf"`) and
+// are handed straight to Gemini's multimodal input on the server.
+export type ImportSource =
+  | { name: string; kind: "text"; markdown: string }
+  | { name: string; kind: "pdf"; base64: string; mimeType: string };
