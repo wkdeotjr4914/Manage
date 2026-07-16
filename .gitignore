@@ -41,3 +41,6 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# 생성물(비밀 임베드) — 커밋 금지, hermes-proxy/gen-compose.mjs로 재생성
+hermes-proxy/compose.deploy.yml

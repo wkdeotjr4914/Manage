@@ -46,7 +46,7 @@ export function toISODate(v: unknown): string | undefined {
 }
 
 // AI(Gemini/에이전트)가 돌려준 raw tasks 배열 → 제목 dedup·정규화한 초안 배열.
-// analyzeMailTasks(Gemini)와 pollMailTasksViaAgent(에이전트) 경로가 공유한다.
+// analyzeMailTasks(Gemini)와 analyzeMailTasksViaHermes(프록시) 경로가 공유한다.
 export function normalizeMailTasks(rawTasks: unknown): MailTaskDraft[] {
   const arr = Array.isArray(rawTasks) ? rawTasks : [];
   const seen = new Set<string>();
@@ -68,14 +68,3 @@ export function normalizeMailTasks(rawTasks: unknown): MailTaskDraft[] {
   }
   return out;
 }
-
-// sendMailTasksViaAgent 서버 액션의 반환 형태(클라이언트 공유).
-export type SendAgentResult =
-  | { ok: true; afterId: string; truncated: boolean }
-  | { ok: false; error: string };
-
-// pollMailTasksViaAgent 서버 액션의 반환 형태(클라이언트 공유).
-export type PollAgentResult =
-  | { ok: true; status: "pending"; cursor: string }
-  | { ok: true; status: "done"; tasks: MailTaskDraft[]; cursor: string }
-  | { ok: false; error: string };

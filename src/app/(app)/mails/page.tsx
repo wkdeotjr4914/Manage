@@ -1,11 +1,13 @@
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { isAiAvailable } from "@/server/import/ai";
-import { isAgentAvailable } from "@/server/agent/discord";
+import { isHermesProxyAvailable } from "@/server/agent/hermesProxy";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { MailWorkbench, type MailRow } from "@/components/mails/MailWorkbench";
 
 export const dynamic = "force-dynamic";
+// 에이전트(프록시) 분석은 Hermes 왕복 + 재시도로 최대 ~45s 걸릴 수 있어 넉넉히.
+export const maxDuration = 60;
 export const metadata = { title: "수집 메일 · Second Brain" };
 
 export default async function MailsPage() {
@@ -47,7 +49,7 @@ export default async function MailsPage() {
         rows={rows}
         projects={projects}
         aiAvailable={isAiAvailable()}
-        agentAvailable={isAgentAvailable()}
+        agentAvailable={isHermesProxyAvailable()}
       />
     </div>
   );

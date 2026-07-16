@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useEffect,
   useRef,
   useState,
   useTransition,
@@ -26,23 +25,16 @@ import type { MailTaskDraft } from "@/lib/mailTasks";
 import {
   analyzeMailTasks,
   registerMailTasks,
-  sendMailTasksViaAgent,
-  pollMailTasksViaAgent,
+  analyzeMailTasksViaHermes,
 } from "@/server/actions/mail";
 import type { MailRow } from "./MailWorkbench";
 
 type CommitSummary = { taskCount: number; pmsTaskCount: number };
-type AgentPhase = "idle" | "sending" | "waiting" | "done" | "error";
-
-// 에이전트(Hermes)는 Discord 경유라 왕복이 길다(~4.5분). 4초 간격으로 폴링하고
-// 6분까지 기다린다.
-const AGENT_POLL_MS = 4000;
-const AGENT_DEADLINE_MS = 6 * 60 * 1000;
 
 /**
  * 수집 메일 1건을 프로젝트 업무로 등록하는 모달.
- * 프로젝트 선택 → Gemini(즉시) / 에이전트(Hermes, 비동기)가 본문을 업무로 분해(미리보기)
- * → 양쪽에서 체크한 항목만 등록.
+ * 프로젝트 선택 → Gemini / 에이전트(Hermes 프록시)가 본문을 업무로 분해(미리보기)
+ * → 양쪽에서 체크한 항목만 등록. 둘 다 동기 호출(한 번 await).
  */
 export function MailTaskDialog({
   mail,
@@ -59,6 +51,7 @@ export function MailTaskDialog({
 }) {
   const router = useRouter();
   const [analyzing, startAnalyze] = useTransition();
+  const [agentAnalyzing, startAgent] = useTransition();
   const [committing, startCommit] = useTransition();
 
   const [projectId, setProjectId] = useState<string>(
@@ -70,29 +63,24 @@ export function MailTaskDialog({
   const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<CommitSummary | null>(null);
 
-  // 에이전트(Hermes) 경로 — 화면에서 대기하며 폴링. cursor/channelId는 폴링 간 전달.
-  const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
+  // 에이전트(Hermes 프록시) 경로 — Gemini와 동일한 동기 호출.
   const [agentTasks, setAgentTasks] = useState<MailTaskDraft[] | null>(null);
   const [agentChecked, setAgentChecked] = useState<boolean[]>([]);
   const [agentError, setAgentError] = useState<string | null>(null);
-  const [agentElapsed, setAgentElapsed] = useState(0);
-  const agentRef = useRef<{ cursor: string; startedAt: number } | null>(null);
-  // 프로젝트 변경 등으로 진행 중이던 에이전트 요청(전송/폴링)을 무효화하기 위한 시퀀스.
+  // 프로젝트 변경 등으로 진행 중이던 에이전트 요청을 무효화하기 위한 시퀀스.
   const agentSeq = useRef(0);
 
   const projectName = projects.find((p) => p.id === projectId)?.name ?? "";
   const geminiSelected = tasks ? checked.filter(Boolean).length : 0;
   const agentSelected = agentTasks ? agentChecked.filter(Boolean).length : 0;
   const selectedCount = geminiSelected + agentSelected;
-  const agentBusy = agentPhase === "sending" || agentPhase === "waiting";
+  const agentBusy = agentAnalyzing;
 
   // 프로젝트가 바뀌면 양쪽 분석 결과를 무효화.
   function onProjectChange(id: string) {
     setProjectId(id);
     setTasks(null);
     setAgentTasks(null);
-    setAgentPhase("idle");
-    agentRef.current = null;
     agentSeq.current++; // 진행 중이던 에이전트 요청 결과를 무효화
     setAgentError(null);
     setNotice(null);
@@ -126,77 +114,24 @@ export function MailTaskDialog({
       return;
     }
     setError(null);
+    setNotice(null);
     setAgentError(null);
     setAgentTasks(null);
-    setAgentElapsed(0);
-    setAgentPhase("sending");
-    const seq = agentSeq.current; // 이 요청의 시퀀스 — 완료 시점에 프로젝트가 바뀌었는지 검사
-    void (async () => {
-      const res = await sendMailTasksViaAgent({ mailId: mail.id, projectId });
-      if (seq !== agentSeq.current) return; // 그 사이 프로젝트가 바뀌면 이 결과는 버린다
+    const seq = agentSeq.current; // 완료 시점에 프로젝트가 바뀌었는지 검사
+    startAgent(async () => {
+      const res = await analyzeMailTasksViaHermes({ mailId: mail.id, projectId });
+      if (seq !== agentSeq.current) return; // 그 사이 프로젝트가 바뀌면 결과 버림
       if (!res.ok) {
         setAgentError(res.error);
-        setAgentPhase("error");
         return;
       }
-      agentRef.current = { cursor: res.afterId, startedAt: Date.now() };
-      if (res.truncated) {
-        setNotice("메일이 길어 앞부분만 에이전트로 전송했습니다(Discord 2000자 제한).");
+      setAgentTasks(res.tasks);
+      setAgentChecked(res.tasks.map(() => true));
+      if (!res.tasks.length) {
+        setNotice("에이전트가 업무로 등록할 만한 내용을 찾지 못했습니다.");
       }
-      setAgentPhase("waiting");
-    })();
+    });
   }
-
-  // 대기 중 경과 시간(초) 표시.
-  useEffect(() => {
-    if (agentPhase !== "waiting") return;
-    const id = setInterval(() => {
-      if (agentRef.current) {
-        setAgentElapsed(Math.floor((Date.now() - agentRef.current.startedAt) / 1000));
-      }
-    }, 1000);
-    return () => clearInterval(id);
-  }, [agentPhase]);
-
-  // 대기 중 폴링 — done/에러/타임아웃까지 재귀 setTimeout.
-  useEffect(() => {
-    if (agentPhase !== "waiting") return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const tick = async () => {
-      const ref = agentRef.current;
-      if (cancelled || !ref) return;
-      if (Date.now() - ref.startedAt > AGENT_DEADLINE_MS) {
-        setAgentError("에이전트 응답이 6분 내에 오지 않았습니다. 잠시 후 다시 시도하세요.");
-        setAgentPhase("error");
-        return;
-      }
-      const res = await pollMailTasksViaAgent({ afterId: ref.cursor });
-      if (cancelled) return;
-      if (!res.ok) {
-        setAgentError(res.error);
-        setAgentPhase("error");
-        return;
-      }
-      ref.cursor = res.cursor; // 커서 전진
-      if (res.status === "done") {
-        setAgentTasks(res.tasks);
-        setAgentChecked(res.tasks.map(() => true));
-        setAgentPhase("done");
-        if (!res.tasks.length) {
-          setNotice("에이전트가 업무로 등록할 만한 내용을 찾지 못했습니다.");
-        }
-        return;
-      }
-      timer = setTimeout(tick, AGENT_POLL_MS);
-    };
-    timer = setTimeout(tick, AGENT_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [agentPhase]);
 
   function register() {
     const geminiSel = tasks ? tasks.filter((_, i) => checked[i]) : [];
@@ -336,7 +271,7 @@ export function MailTaskDialog({
           )}
           {!agentAvailable && (
             <p className="mt-1 text-[11px] text-muted-2">
-              에이전트 분석은 DISCORD_BOT_TOKEN·채널 설정 시 켜집니다.
+              에이전트 분석은 HERMES_PROXY_URL·HERMES_PROXY_KEY 설정 시 켜집니다.
             </p>
           )}
         </div>
@@ -344,7 +279,7 @@ export function MailTaskDialog({
         {notice && <p className="text-xs text-warning">{notice}</p>}
 
         {/* 분석 결과 — Gemini(좌) / 에이전트(우) 나란히 */}
-        {(tasks || agentPhase !== "idle") && (
+        {(tasks || analyzing || agentBusy || agentTasks || agentError) && (
           <div className="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
             {/* Gemini 컬럼 */}
             <div className="flex flex-col gap-1.5">
@@ -384,14 +319,13 @@ export function MailTaskDialog({
               {agentBusy ? (
                 <div className="rounded-lg border border-border bg-surface px-3 py-2 text-xs text-muted-2">
                   <p className="flex items-center gap-1.5">
-                    <Loader2 className="size-3.5 animate-spin" /> 에이전트 분석 중… 최대 5분
-                    {agentPhase === "waiting" && ` (경과 ${agentElapsed}s)`}
+                    <Loader2 className="size-3.5 animate-spin" /> 에이전트 분석 중… 최대 1~2분
                   </p>
                   <p className="mt-1 text-[11px] text-warning">
                     창을 닫으면 결과가 유실됩니다.
                   </p>
                 </div>
-              ) : agentPhase === "error" ? (
+              ) : agentError ? (
                 <p className="text-xs text-danger">{agentError}</p>
               ) : agentTasks ? (
                 agentTasks.length ? (

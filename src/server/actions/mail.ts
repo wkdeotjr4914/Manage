@@ -13,18 +13,11 @@ import { parseDateInput, todayDateInput } from "@/lib/utils";
 import {
   normalizeMailTasks,
   type AnalyzeMailTasksResult,
-  type SendAgentResult,
-  type PollAgentResult,
 } from "@/lib/mailTasks";
 import {
-  isAgentAvailable,
-  agentChannelId,
-  postAgentMessage,
-  fetchMessagesAfter,
-  extractJson,
-  cmpId,
-  type AgentMessage,
-} from "@/server/agent/discord";
+  isHermesProxyAvailable,
+  analyzeMailViaProxy,
+} from "@/server/agent/hermesProxy";
 import type { ActionResult } from "./notes";
 
 const statusSchema = z.object({
@@ -346,48 +339,19 @@ export async function registerMailTasks(
 }
 
 // ---------------------------------------------------------------------------
-// 메일 1건 → 에이전트(Hermes) 업무 분해 — Discord 경유 비동기.
-// Gemini(analyzeMailTasks)와 나란히 두 번째 엔진으로 쓴다. 왕복이 길어(~4.5분)
-// "전송(send) → 폴링(poll)"의 짧은 두 액션으로 나눠 서버 함수 타임아웃을 피한다.
+// 메일 1건 → 에이전트(Hermes) 업무 분해 — VPS의 좁은 프록시(/analyze) 경유 동기.
+// Gemini(analyzeMailTasks)와 나란히 두 번째 엔진. 프록시가 Hermes를 내부 호출하고
+// "메일 → 업무 JSON"만 반환하므로 Gemini 경로와 동일한 동기 UX(한 번 await).
+// (Hermes RCE API는 인터넷 미노출 — hermes-proxy/ 참고.)
 // ---------------------------------------------------------------------------
 
-// Discord 메시지 1건(2000자) 안에 담을 통합 프롬프트. Gemini의 systemInstruction이
-// 없으므로 시스템 지시 + "순수 JSON만" 요구 + 스키마 예시 + 메일 본문을 하나로 합친다.
-const AGENT_JSON_INSTRUCTION = `
-
-★ 출력은 아래 형태의 "순수 JSON"만. 코드펜스나 설명 문장을 붙이지 마세요.
-{"tasks":[{"title":"...","description":"...","status":"TODO","priority":"MEDIUM","dueDate":"2026-07-20"}]}`;
-
-function buildAgentMailPrompt(
-  projectName: string,
-  mailText: string,
-):
-  | { ok: true; prompt: string; truncated: boolean }
-  | { ok: false; error: string } {
-  const LIMIT = 2000; // Discord 메시지 최대 길이
-  const head = `${mailTaskSystemPrompt(projectName)}${AGENT_JSON_INSTRUCTION}\n\n<email>\n`;
-  const tail = `\n</email>`;
-  const budget = LIMIT - head.length - tail.length;
-  if (budget < 200) {
-    return { ok: false, error: "프롬프트 고정 문구가 Discord 2000자 한도에 너무 근접합니다." };
-  }
-  let body = mailText;
-  let truncated = false;
-  if (body.length > budget) {
-    body = body.slice(0, budget - 1);
-    // surrogate pair가 중간에 잘렸으면(하이 서로게이트로 끝나면) 반쪽 한 단위를 버린다.
-    if (/[\uD800-\uDBFF]$/.test(body)) body = body.slice(0, -1);
-    body += "…";
-    truncated = true;
-  }
-  return { ok: true, prompt: `${head}${body}${tail}`, truncated };
-}
-
-/** 메일→업무 프롬프트를 에이전트(Discord) 채널로 전송. 폴링 커서(afterId)를 돌려준다. */
-export async function sendMailTasksViaAgent(input: unknown): Promise<SendAgentResult> {
+/** 메일 1건을 에이전트(Hermes 프록시)로 업무 분해. Gemini analyzeMailTasks와 동일 반환형. */
+export async function analyzeMailTasksViaHermes(
+  input: unknown,
+): Promise<AnalyzeMailTasksResult> {
   const user = await requireUser();
-  if (!isAgentAvailable()) {
-    return { ok: false, error: "에이전트 연동(DISCORD_BOT_TOKEN·채널)이 설정되지 않았습니다." };
+  if (!isHermesProxyAvailable()) {
+    return { ok: false, error: "에이전트 연동(HERMES_PROXY_URL·KEY)이 설정되지 않았습니다." };
   }
   const parsed = analyzeTasksSchema.safeParse(input);
   if (!parsed.success) {
@@ -411,54 +375,13 @@ export async function sendMailTasksViaAgent(input: unknown): Promise<SendAgentRe
     `보낸사람: ${mail.fromAddr}\n` +
     (mail.toAddr ? `받는사람: ${mail.toAddr}\n` : "") +
     (dateStr ? `날짜: ${dateStr}\n` : "") +
-    `\n---\n\n${mail.body || mail.snippet || ""}`;
-
-  const built = buildAgentMailPrompt(project.name, mailText);
-  if (!built.ok) return { ok: false, error: built.error };
+    `\n---\n\n${(mail.body || mail.snippet || "").slice(0, 40000)}`;
 
   try {
-    const { messageId } = await postAgentMessage(built.prompt);
-    return { ok: true, afterId: messageId, truncated: built.truncated };
+    const rawTasks = await analyzeMailViaProxy(mailText, project.name);
+    return { ok: true, tasks: normalizeMailTasks(rawTasks) };
   } catch (e) {
-    console.error("[actions/mail] 에이전트 전송 실패:", e);
-    return { ok: false, error: e instanceof Error ? e.message : "에이전트 전송에 실패했습니다." };
+    console.error("[actions/mail] 에이전트(프록시) 분석 실패:", e);
+    return { ok: false, error: e instanceof Error ? e.message : "에이전트 분석에 실패했습니다." };
   }
-}
-
-const pollAgentSchema = z.object({
-  afterId: z.string().min(1),
-});
-
-/** 에이전트 채널을 1회 폴링. JSON 답장이 오면 업무 초안을, 아니면 pending을 반환.
- *  채널은 클라이언트 입력이 아니라 서버의 agentChannelId()로 고정한다(임의 채널 조회 차단). */
-export async function pollMailTasksViaAgent(input: unknown): Promise<PollAgentResult> {
-  await requireUser();
-  const channelId = agentChannelId();
-  if (!channelId) {
-    return { ok: false, error: "에이전트 연동이 설정되지 않았습니다." };
-  }
-  const parsed = pollAgentSchema.safeParse(input);
-  if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "입력 오류" };
-  }
-
-  let cursor = parsed.data.afterId;
-  let messages: AgentMessage[] = [];
-  try {
-    messages = await fetchMessagesAfter(channelId, cursor);
-  } catch (e) {
-    console.error("[actions/mail] 에이전트 폴링 실패:", e);
-    return { ok: false, error: e instanceof Error ? e.message : "에이전트 응답 조회에 실패했습니다." };
-  }
-
-  for (const m of messages) {
-    if (cmpId(m.id, cursor) > 0) cursor = m.id; // 커서 전진
-    if (!m.content) continue;
-    const json = extractJson(m.content);
-    // 상태배너·"🐍 Running code…" 등 비-JSON 또는 tasks 없는 메시지는 건너뛴다.
-    if (!json || !Array.isArray((json as { tasks?: unknown }).tasks)) continue;
-    const tasks = normalizeMailTasks((json as { tasks?: unknown }).tasks);
-    return { ok: true, status: "done", tasks, cursor };
-  }
-  return { ok: true, status: "pending", cursor };
 }
