@@ -12,6 +12,7 @@ const TABS: { seg: string; label: string }[] = [
   { seg: "requirements-def", label: "요구사항 정의" },
   { seg: "requirements", label: "요구사항 명세서" },
   { seg: "tasks", label: "업무 TASK" },
+  { seg: "staffing", label: "인력 관리" },
   { seg: "deliverables", label: "산출물 관리" },
 ];
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { PmsListPage } from "@/components/pms/PmsListPage";
 import type { Column } from "@/components/pms/DataTable";
 import type { FieldDef, FieldValue } from "@/components/pms/RecordFormModal";
@@ -17,6 +18,7 @@ export type DeliverableItem = {
   templateFile: string | null;
   outputFile: string | null;
   outputLink: string | null;
+  source: string | null;
 };
 
 const columns: Column<DeliverableItem>[] = [
@@ -62,6 +64,7 @@ const columns: Column<DeliverableItem>[] = [
       );
     },
   },
+  { header: "출처", cell: (r) => <SourceBadge source={r.source} /> },
 ];
 
 const fields: FieldDef[] = [

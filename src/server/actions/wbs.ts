@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { wbsSchema } from "@/lib/validation";
-import { parseDateInput } from "@/lib/utils";
+import { parseDateInput, todayDateInput } from "@/lib/utils";
 import type { ActionResult } from "./notes";
 
 const seg = (projectId: string) => `/projects/${projectId}/wbs`;
@@ -49,7 +49,8 @@ export async function createWBSItem(
       priority: d.priority,
       status: d.status,
       progress: d.progress,
-      startDate: parseDateInput(d.startDate),
+      // 시작일을 비우면 데이터 쌓은 시점(오늘)을 디폴트로. 종료일은 입력값 그대로.
+      startDate: parseDateInput(d.startDate || todayDateInput()),
       endDate: parseDateInput(d.endDate),
       planStartDate: parseDateInput(d.planStartDate),
       planEndDate: parseDateInput(d.planEndDate),

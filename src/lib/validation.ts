@@ -34,6 +34,11 @@ export const TASK_PRIORITY_VALUES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const
 
 export const ROLE_VALUES = ["MEMBER", "ADMIN"] as const;
 
+// 레코드 생성 출처(메일/카톡/회의록)의 캐노니컬 값 목록 — theme.ts의 SOURCES와 짝.
+// 출처는 시스템이 생성 시점에 내부 리터럴("MAIL"/"KAKAO"/"MEETING")로 지정하므로
+// 폼 스키마엔 넣지 않는다. 표시할 때 SourceBadge가 미지정/알 수 없는 값을 걸러낸다.
+export const SOURCE_VALUES = ["MAIL", "KAKAO", "MEETING"] as const;
+
 export const noteSchema = z.object({
   title: z.string().trim().min(1, "제목을 입력하세요.").max(200),
   content: z.string().max(20000).optional().default(""),
@@ -137,6 +142,13 @@ export const REQUIREMENT_SPEC_STATUS_VALUES = [
 
 export const IMPORTANCE_VALUES = ["LOW", "MEDIUM", "HIGH"] as const;
 
+export const STAFF_GRADE_VALUES = [
+  "JUNIOR",
+  "INTERMEDIATE",
+  "SENIOR",
+  "EXPERT",
+] as const;
+
 const optionalText = z.string().optional().or(z.literal(""));
 const dateInput = z.string().optional().or(z.literal(""));
 const progress = z.coerce.number().int().min(0).max(100).optional().default(0);
@@ -216,6 +228,30 @@ export const deliverableSchema = z.object({
   outputFile: z.string().max(500).optional().or(z.literal("")),
   outputLink: z.string().max(1000).optional().or(z.literal("")),
 });
+
+export const staffDemandSchema = z.object({
+  projectId: z.string().min(1),
+  role: z.string().trim().min(1, "직무를 입력하세요.").max(100),
+  grade: z.enum(STAFF_GRADE_VALUES).default("INTERMEDIATE"),
+  headcount: z.coerce.number().int().min(0).max(9999).optional().default(1),
+  note: z.string().max(1000).optional().or(z.literal("")),
+});
+
+export const staffMemberSchema = z.object({
+  projectId: z.string().min(1),
+  name: z.string().trim().min(1, "이름을 입력하세요.").max(100),
+  grade: z.enum(STAFF_GRADE_VALUES).default("INTERMEDIATE"),
+  role: optionalText,
+  company: optionalText,
+  allocation: z.coerce.number().int().min(0).max(100).optional().default(100),
+  startDate: dateInput,
+  endDate: dateInput,
+  contact: optionalText,
+  note: z.string().max(1000).optional().or(z.literal("")),
+});
+
+export type StaffDemandInput = z.infer<typeof staffDemandSchema>;
+export type StaffMemberInput = z.infer<typeof staffMemberSchema>;
 
 export type RequirementInput = z.infer<typeof requirementSchema>;
 export type RequirementSpecInput = z.infer<typeof requirementSpecSchema>;

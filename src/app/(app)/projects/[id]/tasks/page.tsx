@@ -29,6 +29,7 @@ export default async function TasksPage({
     startDate: toDateInputValue(r.startDate),
     endDate: toDateInputValue(r.endDate),
     description: r.description,
+    source: r.source,
   }));
   return <PmsTasksPageClient projectId={id} items={items} />;
 }

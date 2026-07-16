@@ -10,6 +10,7 @@ import {
   Check,
   Archive,
   RotateCcw,
+  ListTodo,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ import {
   setCollectedMailStatus,
   convertMailToNote,
 } from "@/server/actions/mail";
+import { MailTaskDialog } from "./MailTaskDialog";
 
 export type MailRow = {
   id: string;
@@ -29,6 +31,7 @@ export type MailRow = {
   status: "NEW" | "READ" | "ARCHIVED";
   memo: string | null;
   noteId: string | null;
+  projectId: string | null;
 };
 
 type View = "NEW" | "READ" | "ARCHIVED" | "ALL";
@@ -39,7 +42,17 @@ const STATUS_META: Record<MailRow["status"], { label: string; color: string }> =
   ARCHIVED: { label: "보관", color: "#9ca3af" },
 };
 
-export function MailWorkbench({ rows }: { rows: MailRow[] }) {
+export function MailWorkbench({
+  rows,
+  projects,
+  aiAvailable,
+  agentAvailable,
+}: {
+  rows: MailRow[];
+  projects: { id: string; name: string }[];
+  aiAvailable: boolean;
+  agentAvailable: boolean;
+}) {
   const [, startAction] = useTransition();
   const [view, setView] = useState<View>("NEW");
   const [search, setSearch] = useState("");
@@ -47,6 +60,7 @@ export function MailWorkbench({ rows }: { rows: MailRow[] }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [taskMail, setTaskMail] = useState<MailRow | null>(null);
 
   const counts = useMemo(
     () => ({
@@ -167,6 +181,14 @@ export function MailWorkbench({ rows }: { rows: MailRow[] }) {
                     )}
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setTaskMail(r)}
+                      disabled={busy}
+                    >
+                      <ListTodo className="size-3.5" /> 업무 등록
+                    </Button>
                     {r.noteId ? (
                       <Link
                         href={`/notes/${r.noteId}`}
@@ -206,6 +228,16 @@ export function MailWorkbench({ rows }: { rows: MailRow[] }) {
             );
           })}
         </div>
+      )}
+
+      {taskMail && (
+        <MailTaskDialog
+          mail={taskMail}
+          projects={projects}
+          aiAvailable={aiAvailable}
+          agentAvailable={agentAvailable}
+          onClose={() => setTaskMail(null)}
+        />
       )}
     </div>
   );

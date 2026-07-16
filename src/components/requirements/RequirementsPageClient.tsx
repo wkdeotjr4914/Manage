@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { formatDate } from "@/lib/utils";
 import { PmsListPage } from "@/components/pms/PmsListPage";
 import type { Column } from "@/components/pms/DataTable";
@@ -27,6 +28,7 @@ export type RequirementItem = {
   dueDate: string;
   targetDate: string;
   updatedBy: string | null;
+  source: string | null;
 };
 
 const toOptions = (arr: string[]) => arr.map((v) => ({ value: v, label: v }));
@@ -61,6 +63,7 @@ const columns: Column<RequirementItem>[] = [
   { header: "요청일", cell: (r) => <DateText v={r.requestDate} /> },
   { header: "기한", cell: (r) => <DateText v={r.dueDate} /> },
   { header: "목표일", cell: (r) => <DateText v={r.targetDate} /> },
+  { header: "출처", cell: (r) => <SourceBadge source={r.source} /> },
 ];
 
 const fields: FieldDef[] = [

@@ -5,7 +5,7 @@ import { prisma } from "@/server/db";
 import { getScope } from "@/server/auth";
 import { analyzeHeuristic } from "@/server/import/heuristic";
 import { analyzeAI, analyzeAIFromPdf, isAiAvailable } from "@/server/import/ai";
-import { parseDateInput } from "@/lib/utils";
+import { parseDateInput, todayDateInput } from "@/lib/utils";
 import type { ImportPlan } from "@/lib/import";
 
 type AnalyzeResult =
@@ -105,6 +105,7 @@ export async function commitImport(input: {
   projectId?: string | null;
   projectName?: string;
   sourceKey?: string;
+  source?: string | null; // "MAIL" | "KAKAO" | "MEETING" | null — 생성 레코드에 출처 뱃지용
   skipTasks?: boolean;
   // Per-domain toggles for the extracted PMS items (default: save when present).
   saveRequirements?: boolean;
@@ -182,6 +183,8 @@ export async function commitImport(input: {
   // which is never deduplicated. Used after creation to replace a prior import
   // of the same file (see the delete-and-replace step below).
   const sourceKey = input.sourceKey?.trim() || null;
+  // 생성 출처(메일/카톡/회의록). 이 commit으로 만들어지는 모든 레코드에 동일 적용.
+  const source = input.source ?? null;
 
   // Create notes, mapping plan keys → db ids.
   const idByKey = new Map<string, string>();
@@ -198,6 +201,7 @@ export async function commitImport(input: {
         type: n.type,
         topicId,
         sourceKey,
+        source,
         authorId: scope.userId,
         workspaceId: scope.workspaceId,
         tags: noteTagIds.length
@@ -262,6 +266,7 @@ export async function commitImport(input: {
           status: t.status,
           priority: t.priority,
           order: perStatus[t.status] * 1000,
+          source,
         },
       });
       taskCount++;
@@ -308,6 +313,7 @@ export async function commitImport(input: {
             requestDate: parseDateInput(r.requestDate),
             dueDate: parseDateInput(r.dueDate),
             targetDate: parseDateInput(r.targetDate),
+            source,
           },
         });
         pms.requirements++;
@@ -340,6 +346,7 @@ export async function commitImport(input: {
             dueDate: parseDateInput(r.dueDate),
             targetDate: parseDateInput(r.targetDate),
             progress: r.progress ?? 0,
+            source,
           },
         });
         pms.requirementSpecs++;
@@ -396,8 +403,10 @@ export async function commitImport(input: {
             priority: wi.priority ?? "MEDIUM",
             status: wi.status ?? "TODO",
             progress: wi.progress ?? 0,
-            startDate: parseDateInput(wi.startDate),
+            // 시작일이 없으면 데이터 쌓은 시점(오늘)을 디폴트로. 종료일은 그대로.
+            startDate: parseDateInput(wi.startDate || todayDateInput()),
             endDate: parseDateInput(wi.endDate),
+            source,
           },
           select: { id: true },
         });
@@ -430,8 +439,10 @@ export async function commitImport(input: {
             priority: t.priority ?? "MEDIUM",
             status: t.status ?? "TODO",
             progress: t.progress ?? 0,
-            startDate: parseDateInput(t.startDate),
+            // 시작일이 없으면 데이터 쌓은 시점(오늘)을 디폴트로. 종료일은 그대로.
+            startDate: parseDateInput(t.startDate || todayDateInput()),
             endDate: parseDateInput(t.endDate),
+            source,
           },
         });
         pms.pmsTasks++;
@@ -456,6 +467,7 @@ export async function commitImport(input: {
             sortOrder: order,
             name: d.name,
             description: d.description || null,
+            source,
           },
         });
         pms.deliverables++;

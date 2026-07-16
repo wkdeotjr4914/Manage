@@ -23,6 +23,7 @@ export default async function DeliverablesPage({
     templateFile: r.templateFile,
     outputFile: r.outputFile,
     outputLink: r.outputLink,
+    source: r.source,
   }));
   return <DeliverablesPageClient projectId={id} items={items} />;
 }

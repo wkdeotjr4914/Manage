@@ -9,6 +9,7 @@ import {
   Tags,
   FolderKanban,
   Upload,
+  MessageCircle,
   Gavel,
   Brain,
   Users,
@@ -33,7 +34,8 @@ const NAV: NavItem[] = [
   { href: "/projects", label: "프로젝트", icon: FolderKanban },
   { href: "/bids", label: "입찰공고", icon: Gavel },
   { href: "/mails", label: "수집 메일", icon: Mail },
-  { href: "/import", label: "가져오기", icon: Upload },
+  { href: "/import", label: "가져오기", icon: Upload, exact: true },
+  { href: "/import/kakao", label: "카카오톡", icon: MessageCircle },
   { href: "/settings/integrations", label: "연동", icon: Plug },
 ];
 

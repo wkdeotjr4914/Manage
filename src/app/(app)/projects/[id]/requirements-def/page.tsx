@@ -32,6 +32,7 @@ export default async function RequirementsDefPage({
     dueDate: toDateInputValue(r.dueDate),
     targetDate: toDateInputValue(r.targetDate),
     updatedBy: r.updatedBy,
+    source: r.source,
   }));
   return <RequirementsPageClient projectId={id} items={items} />;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { formatDate } from "@/lib/utils";
 import { PmsListPage } from "@/components/pms/PmsListPage";
 import { ProgressBar } from "@/components/pms/ProgressBar";
@@ -38,6 +39,7 @@ export type RequirementSpecItem = {
   dueDate: string;
   targetDate: string;
   progress: number;
+  source: string | null;
 };
 
 const statusOptions = REQUIREMENT_SPEC_STATUS_ORDER.map((k) => ({
@@ -94,6 +96,7 @@ const columns: Column<RequirementSpecItem>[] = [
       </span>
     ),
   },
+  { header: "출처", cell: (r) => <SourceBadge source={r.source} /> },
 ];
 
 const fields: FieldDef[] = [

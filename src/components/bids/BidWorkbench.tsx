@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Select, Label } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, daysAgo, formatDateTime } from "@/lib/utils";
 import { BID_KEYWORD_GROUPS } from "@/lib/g2b";
 import { collectBids, setBidStatus } from "@/server/actions/bids";
 
@@ -85,6 +85,9 @@ export function BidWorkbench({
   );
   const [view, setView] = useState<"active" | "liked">("active");
   const [search, setSearch] = useState("");
+  // 목록 필터(수집 컨트롤과 별개) — 화면에 표시된 공고만 걸러낸다.
+  const [catFilter, setCatFilter] = useState<Record<string, boolean>>({});
+  const [periodFilter, setPeriodFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("bidClseDt");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [error, setError] = useState<string | null>(null);
@@ -134,6 +137,13 @@ export function BidWorkbench({
 
   const rowsView = useMemo(() => {
     const q = search.trim();
+    // 선택된 카테고리 → label 집합. 비어 있으면 카테고리 필터 미적용(전체).
+    const selectedLabels = new Set(
+      BID_KEYWORD_GROUPS.filter((g) => catFilter[g.key]).map((g) => g.label),
+    );
+    // 기간 필터 컷오프(epoch ms). "all"이면 미적용. daysAgo로 render purity 유지.
+    const cutoff =
+      periodFilter === "all" ? null : daysAgo(Number(periodFilter)).getTime();
     const list = rows.filter((r) => {
       // 뷰별 기본 필터: 진행 중은 마감/제외 숨김, 관심은 관심 등록만(마감 무관).
       if (view === "liked") {
@@ -141,6 +151,15 @@ export function BidWorkbench({
       } else {
         if (r.closed) return false;
         if (r.status === "EXCLUDED") return false;
+      }
+      // 카테고리 필터: 선택된 카테고리 중 하나라도 매칭(OR)되어야 통과.
+      if (selectedLabels.size > 0) {
+        if (!r.matchedKeywords.some((k) => selectedLabels.has(k))) return false;
+      }
+      // 기간 필터: 공고일(bidNtceDt)이 컷오프 이후여야 통과. 값 없으면 제외.
+      if (cutoff !== null) {
+        const t = r.bidNtceDt ? new Date(r.bidNtceDt).getTime() : NaN;
+        if (Number.isNaN(t) || t < cutoff) return false;
       }
       // 공고명·기관명 통합 검색.
       if (q) {
@@ -157,12 +176,26 @@ export function BidWorkbench({
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb), "ko") * dir;
     });
-  }, [rows, view, search, sortKey, sortDir]);
+  }, [rows, view, search, catFilter, periodFilter, sortKey, sortDir]);
 
   const tabBase =
     "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors";
   const tabActive = "bg-primary/20 text-foreground ring-1 ring-primary/30";
   const tabIdle = "text-muted hover:text-foreground";
+
+  const chipBase =
+    "rounded-full border px-3 py-1 text-xs font-medium transition-colors";
+  const chipActive = "border-primary/40 bg-primary/20 text-foreground";
+  const chipIdle = "border-border text-muted hover:border-primary/30 hover:text-foreground";
+
+  const filterActive =
+    Object.values(catFilter).some(Boolean) || periodFilter !== "all" || search.trim() !== "";
+
+  function resetFilters() {
+    setCatFilter({});
+    setPeriodFilter("all");
+    setSearch("");
+  }
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -209,31 +242,67 @@ export function BidWorkbench({
         {notice && <p className="text-sm text-success">{notice}</p>}
       </div>
 
-      {/* 뷰 탭 + 검색 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex rounded-lg border border-border bg-surface-2 p-0.5">
-          <button onClick={() => setView("active")} className={cn(tabBase, view === "active" ? tabActive : tabIdle)}>
-            진행 중
-          </button>
-          <button onClick={() => setView("liked")} className={cn(tabBase, view === "liked" ? tabActive : tabIdle)}>
-            <Heart className={cn("size-3.5", view === "liked" && "fill-current text-danger")} /> 관심 {likedCount}
-          </button>
+      {/* 뷰 탭 + 목록 필터(카테고리·기간·키워드) */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex rounded-lg border border-border bg-surface-2 p-0.5">
+            <button onClick={() => setView("active")} className={cn(tabBase, view === "active" ? tabActive : tabIdle)}>
+              진행 중
+            </button>
+            <button onClick={() => setView("liked")} className={cn(tabBase, view === "liked" ? tabActive : tabIdle)}>
+              <Heart className={cn("size-3.5", view === "liked" && "fill-current text-danger")} /> 관심 {likedCount}
+            </button>
+          </div>
+          <Select
+            value={periodFilter}
+            onChange={(e) => setPeriodFilter(e.target.value)}
+            className="w-auto"
+            aria-label="기간 필터"
+          >
+            <option value="all">전체 기간</option>
+            <option value="3">최근 3일</option>
+            <option value="7">최근 7일</option>
+            <option value="15">최근 15일</option>
+          </Select>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="공고명·기관명 키워드 검색"
+            className="min-w-56 flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm sm:max-w-xs"
+          />
+          <span className="ml-auto text-xs text-muted-2">{rowsView.length}건</span>
         </div>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="공고명·기관명 검색"
-          className="min-w-56 flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm sm:max-w-xs"
-        />
-        <span className="ml-auto text-xs text-muted-2">{rowsView.length}건</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {BID_KEYWORD_GROUPS.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              onClick={() => setCatFilter((s) => ({ ...s, [g.key]: !s[g.key] }))}
+              className={cn(chipBase, catFilter[g.key] ? chipActive : chipIdle)}
+            >
+              {g.label}
+            </button>
+          ))}
+          {filterActive && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="ml-1 text-xs text-muted-2 underline-offset-2 hover:text-foreground hover:underline"
+            >
+              필터 초기화
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 데이터 그리드 */}
       {rowsView.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border bg-surface-2/40 p-8 text-center text-sm text-muted-2">
-          {view === "liked"
-            ? "관심 등록한 공고가 없습니다. 하트를 눌러 관심에 추가하세요."
-            : "표시할 공고가 없습니다. 위에서 “지금 가져오기”를 눌러 수집하세요."}
+          {filterActive
+            ? "필터 조건과 일치하는 공고가 없습니다. 필터를 조정하거나 초기화하세요."
+            : view === "liked"
+              ? "관심 등록한 공고가 없습니다. 하트를 눌러 관심에 추가하세요."
+              : "표시할 공고가 없습니다. 위에서 “지금 가져오기”를 눌러 수집하세요."}
         </p>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border">

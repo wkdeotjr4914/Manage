@@ -4,6 +4,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Link2, User, Trash2 } from "lucide-react";
 import { TASK_PRIORITIES, type TaskPriorityKey } from "@/lib/theme";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { formatDate, tint } from "@/lib/utils";
 
 export type TaskData = {
@@ -16,6 +17,7 @@ export type TaskData = {
   assignee: { name: string | null } | null;
   dueDate: string | null;
   noteCount: number;
+  source: string | null;
 };
 
 export function TaskCard({
@@ -90,6 +92,7 @@ export function TaskCard({
             {task.dueDate && (
               <span className="text-muted-2">{formatDate(task.dueDate)}</span>
             )}
+            <SourceBadge source={task.source} />
           </div>
         </div>
         {onDelete && !overlay && (

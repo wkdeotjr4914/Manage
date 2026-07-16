@@ -113,6 +113,26 @@ export const TASK_PRIORITIES: Record<
   URGENT: { label: "긴급", color: "#f87171" },
 };
 
+// 소프트웨어 기술자 등급 (인력관리)
+export type StaffGradeKey = "JUNIOR" | "INTERMEDIATE" | "SENIOR" | "EXPERT";
+
+export const STAFF_GRADES: Record<
+  StaffGradeKey,
+  { label: string; color: string }
+> = {
+  JUNIOR: { label: "초급", color: "#94a3b8" },
+  INTERMEDIATE: { label: "중급", color: "#60a5fa" },
+  SENIOR: { label: "고급", color: "#34d399" },
+  EXPERT: { label: "특급", color: "#a78bfa" },
+};
+
+export const STAFF_GRADE_ORDER: StaffGradeKey[] = [
+  "JUNIOR",
+  "INTERMEDIATE",
+  "SENIOR",
+  "EXPERT",
+];
+
 // ----------------------------------------------------------------------------
 // PMS submenu domain (ported from spmf)
 // ----------------------------------------------------------------------------
@@ -177,3 +197,12 @@ export const REQUIREMENT_SPEC_SYSTEM_TYPES = [
   "사용자",
   "공통",
 ];
+
+// 레코드 생성 출처 — 메일/카톡/문서(회의록) 가져오기로 자동 생성된 항목에 뱃지로 표시.
+// 값은 DB의 String? `source` 컬럼(수동 생성은 null → 뱃지 없음)과 1:1.
+export type SourceKey = "MAIL" | "KAKAO" | "MEETING";
+export const SOURCES: Record<SourceKey, { label: string; color: string }> = {
+  MAIL: { label: "메일", color: "#60a5fa" },
+  KAKAO: { label: "카톡", color: "#fbbf24" },
+  MEETING: { label: "회의록", color: "#a78bfa" },
+};

@@ -50,6 +50,7 @@ export default async function NotesPage({
       title: true,
       summary: true,
       type: true,
+      source: true,
       updatedAt: true,
       topic: { select: { name: true, color: true } },
       tags: { select: { tag: { select: { name: true } } } },

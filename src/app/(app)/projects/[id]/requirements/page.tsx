@@ -34,6 +34,7 @@ export default async function RequirementsPage({
     dueDate: toDateInputValue(r.dueDate),
     targetDate: toDateInputValue(r.targetDate),
     progress: r.progress,
+    source: r.source,
   }));
   return <RequirementSpecsPageClient projectId={id} items={items} />;
 }

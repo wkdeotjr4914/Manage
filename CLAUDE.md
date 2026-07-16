@@ -61,10 +61,15 @@ mutations go through server actions.
   `Topic`. Notes carry a `sourceKey` (usually the imported filename) so re-importing a
   file can delete-and-replace its prior notes instead of duplicating.
 - **PMS**: `Project` → `Task` (kanban) plus the **submenu domain ported from "spmf"**:
-  `Requirement`, `RequirementSpec`, `WBSItem`, `PmsTask`, `Deliverable`. Every submenu
-  record is scoped to a `Project` with `onDelete: Cascade`. Rendered under
-  `/projects/[id]/{wbs,requirements-def,requirements,tasks,deliverables}` — the tab set
-  lives in `components/shell/ProjectTopNav.tsx`, chrome in `app/projects/[id]/layout.tsx`.
+  `Requirement`, `RequirementSpec`, `WBSItem`, `PmsTask`, `Deliverable`, plus a
+  **staffing** domain added on the same pattern (`StaffDemand` = required headcount by
+  role+grade, `StaffMember` = actually-assigned people; grades come from the `StaffGrade`
+  enum 초급/중급/고급/특급). Every submenu record is scoped to a `Project` with
+  `onDelete: Cascade`. Rendered under
+  `/projects/[id]/{wbs,requirements-def,requirements,tasks,staffing,deliverables}` — the
+  tab set lives in `components/shell/ProjectTopNav.tsx`, chrome in
+  `app/projects/[id]/layout.tsx`. The `staffing` page stacks two `PmsListPage` lists
+  (요구 인력 / 투입 인력) under a grade-by-grade required-vs-assigned summary.
 - **Bridge**: `NoteLink` attaches a note to a project or task (`relation` label). This is
   what makes imported documents show up on a project *and* in the graph.
 
@@ -98,18 +103,39 @@ anchor note into one constellation. `react-force-graph-2d` is browser-only — i
 via `dynamic(..., { ssr: false })` in `components/graph/GraphView.tsx`. The graph canvas
 is always dark-themed regardless of the app theme.
 
-### Document import pipeline (signature feature)
+### AI ingestion pipelines (import · KakaoTalk · mail)
 
-`/import` → `analyzeImport` (mode `"heuristic"` or `"ai"`) produces an `ImportPlan`
-(`src/lib/import.ts`), which `commitImport` writes transactionally into notes/edges/tasks
-and the PMS submenu tables (per-domain save toggles; dedup by name/sourceKey).
+**The core AI is Google Gemini, NOT Claude, funnelling through one low-level call:
+`callGemini()` in `src/server/import/ai.ts`** (one exception — a Discord-based **Hermes** agent
+on the mail screen, below). It hits the `generativelanguage` REST API
+with a Korean `systemInstruction` + a `responseSchema` (forced structured JSON) at
+`temperature: 0.2`. Default model `gemini-flash-lite-latest` — **use `*-latest` aliases only;
+pinned/dated model ids 404 or are retired.** Set via `GEMINI_API_KEY` (+ optional
+`IMPORT_AI_MODEL`); with no key the AI paths are disabled. Three consumers share it, and all
+of them end at `commitImport` (`src/server/actions/import.ts`), which writes transactionally
+into notes/edges/tasks and the PMS submenu tables (per-domain save toggles; dedup by
+name/sourceKey; re-import delete-and-replaces by `sourceKey`, and `source` tags rows
+MAIL/KAKAO/MEETING). Extracted dates are `YYYY-MM-DD`, bound to `Date` via `parseDateInput`.
 
-- **The import AI is Google Gemini, NOT Claude** (`src/server/import/ai.ts`). It calls the
-  `generativelanguage` REST API with a `responseSchema`; `coercePlan` is the validation
-  backstop. Default model `gemini-flash-lite-latest` — **use `*-latest` aliases only;
-  pinned/dated model ids 404 or are retired.** Set via `GEMINI_API_KEY` (+ optional
-  `IMPORT_AI_MODEL`); with no key, only heuristic mode runs.
-- Extracted dates are `YYYY-MM-DD` strings, bound to `Date` via `parseDateInput`.
+- **Document import (`/import`, the signature feature).** `analyzeImport` (mode `"heuristic"`
+  or `"ai"`) produces an `ImportPlan` (`src/lib/import.ts`). AI mode → `analyzeAI`, PDFs →
+  `analyzeAIFromPdf` (base64 `inlineData` multimodal — Gemini does OCR/tables directly, so a
+  **PDF forces AI mode**). No key / plain text → `analyzeHeuristic`. `coercePlan` is the
+  validation backstop; front-matter/hashtag metadata overrides AI inference (`mergeMetadata`).
+- **KakaoTalk import (`/import/kakao`).** `parseKakaoExport` (client) → `chunkMessages`
+  (~45KB, ≤20 chunks) → `analyzeKakaoChat` (`src/server/actions/kakao.ts`) calls `callGemini`
+  **per chunk sequentially**, classifying only work-related messages into per-project groups
+  (existing project list is injected into the prompt) → `groupToPlan` → `commitImport`.
+- **Mail (`/mails`).** `analyzeMailTasks` (`src/server/actions/mail.ts`) breaks a mail body
+  into candidate tasks; `registerMailTasks` saves only the checked ones as Task/PmsTask.
+  **A second engine sits beside Gemini here — the self-hosted Hermes agent over Discord REST**
+  (`src/server/agent/discord.ts`): `sendMailTasksViaAgent` posts a ≤2000-char prompt and
+  `pollMailTasksViaAgent` polls for the JSON reply (async — the dialog waits & auto-refreshes,
+  ~tens of seconds round-trip; channel is server-fixed via `agentChannelId()`). Needs a
+  **separate Discord bot** (Hermes ignores its *own* token's messages as self) +
+  `DISCORD_ALLOW_BOTS=all` on the Hermes VPS. `convertMailToNote` instead **reuses the import
+  pipeline** (heuristic, idempotent via `sourceKey=gmail:{messageId}`). Staffing (`/staffing`)
+  uses **no AI** — plain CRUD.
 
 ### Dates & React-purity gotcha
 

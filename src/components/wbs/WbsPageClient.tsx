@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { formatDate } from "@/lib/utils";
 import { PmsListPage } from "@/components/pms/PmsListPage";
 import { ProgressBar } from "@/components/pms/ProgressBar";
@@ -36,6 +37,7 @@ export type WBSListItem = {
   planStartDate: string;
   planEndDate: string;
   description: string | null;
+  source: string | null;
 };
 
 const priorityOptions = (["LOW", "MEDIUM", "HIGH", "URGENT"] as const).map(
@@ -83,6 +85,7 @@ const columns: Column<WBSListItem>[] = [
       </span>
     ),
   },
+  { header: "출처", cell: (r) => <SourceBadge source={r.source} /> },
 ];
 
 const toInitial = (item: WBSListItem | null): Record<string, FieldValue> => ({

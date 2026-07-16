@@ -51,6 +51,7 @@ export default async function ProjectDetailPage({
     assignee: t.assignee ? { name: t.assignee.name } : null,
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
     noteCount: t._count.links,
+    source: t.source,
   }));
 
   const done = tasks.filter((t) => t.status === "DONE").length;

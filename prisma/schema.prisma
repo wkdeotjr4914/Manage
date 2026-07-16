@@ -134,6 +134,10 @@ model Note {
   // can delete-and-replace the previous version instead of duplicating it.
   sourceKey String?
 
+  // How this record was created: "MAIL" | "KAKAO" | "MEETING" (=/import 문서).
+  // Null for manually-created records. Rendered as a badge via lib/theme SOURCES.
+  source String?
+
   tags NoteTag[]
 
   outgoingEdges Edge[] @relation("EdgeSource")
@@ -221,6 +225,8 @@ model Project {
   wbsItems         WBSItem[]
   pmsTasks         PmsTask[]
   deliverables     Deliverable[]
+  staffDemands     StaffDemand[]
+  staffMembers     StaffMember[]
   gmailLabelRules  GmailLabelRule[]
 }
 
@@ -232,6 +238,7 @@ model Task {
   priority    TaskPriority @default(MEDIUM)
   order       Float        @default(0)
   dueDate     DateTime?
+  source      String?      // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -307,6 +314,7 @@ model Requirement {
   dueDate     DateTime?
   targetDate  DateTime?
   updatedBy   String?
+  source      String?  // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -335,6 +343,7 @@ model RequirementSpec {
   dueDate     DateTime?
   targetDate  DateTime?
   progress    Int                   @default(0)
+  source      String?               // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
 
@@ -362,6 +371,7 @@ model WBSItem {
   planStartDate DateTime?
   planEndDate   DateTime?
   description   String?
+  source        String?      // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   sortOrder     Int          @default(0)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
@@ -384,6 +394,7 @@ model PmsTask {
   startDate   DateTime?
   endDate     DateTime?
   description String?
+  source      String?      // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   sortOrder   Int          @default(0)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -402,8 +413,54 @@ model Deliverable {
   templateFile String?
   outputFile   String?
   outputLink   String?
+  source       String?  // "MAIL" | "KAKAO" | "MEETING" | null(수동)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// 소프트웨어 기술자 등급 (인력관리)
+enum StaffGrade {
+  JUNIOR // 초급
+  INTERMEDIATE // 중급
+  SENIOR // 고급
+  EXPERT // 특급
+}
+
+// 요구 인력 (직무·등급별 요구 인원 계획)
+model StaffDemand {
+  id        String     @id @default(cuid())
+  projectId String
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sortOrder Int        @default(0)
+  role      String // 직무 (PM, 개발, 디자인 등)
+  grade     StaffGrade @default(INTERMEDIATE)
+  headcount Int        @default(1) // 요구 인원
+  note      String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([projectId, sortOrder])
+}
+
+// 투입 인력 (실제 배정 인원)
+model StaffMember {
+  id         String     @id @default(cuid())
+  projectId  String
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sortOrder  Int        @default(0)
+  name       String // 이름
+  grade      StaffGrade @default(INTERMEDIATE)
+  role       String? // 직무
+  company    String? // 소속/회사
+  allocation Int        @default(100) // 투입률(%)
+  startDate  DateTime? // 참여 시작
+  endDate    DateTime? // 참여 종료
+  contact    String? // 연락처
+  note       String? // 비고
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
   @@index([projectId, sortOrder])
 }

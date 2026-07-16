@@ -30,6 +30,7 @@ export default async function WbsPage({
     planStartDate: toDateInputValue(r.planStartDate),
     planEndDate: toDateInputValue(r.planEndDate),
     description: r.description,
+    source: r.source,
   }));
   return <WbsPageClient projectId={id} items={items} />;
 }

@@ -47,6 +47,7 @@ export default async function DashboardPage() {
         title: true,
         summary: true,
         type: true,
+        source: true,
         updatedAt: true,
         topic: { select: { name: true, color: true } },
         tags: { select: { tag: { select: { name: true } } } },

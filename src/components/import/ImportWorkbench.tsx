@@ -225,6 +225,7 @@ export function ImportWorkbench({
           extraTags,
           projectId: projId ?? undefined,
           sourceKey: it.source.name,
+          source: "MEETING",
           skipTasks,
           saveRequirements: savePms.requirements,
           saveRequirementSpecs: savePms.requirementSpecs,

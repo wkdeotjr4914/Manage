@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { SourceBadge } from "@/components/ui/SourceBadge";
 import { NODE_TYPES, type NodeTypeKey } from "@/lib/theme";
 import { formatDate } from "@/lib/utils";
 
@@ -8,6 +9,7 @@ export type NoteCardData = {
   title: string;
   summary: string | null;
   type: NodeTypeKey;
+  source?: string | null;
   updatedAt: Date | string;
   topic: { name: string; color: string | null } | null;
   tags: { name: string }[];
@@ -25,7 +27,10 @@ export function NoteCard({ note }: { note: NoteCardData }) {
       className="group card-shadow card-shadow-hover flex flex-col gap-2.5 rounded-2xl border border-border bg-surface p-4 transition-all hover:border-border-strong"
     >
       <div className="flex items-center justify-between gap-2">
-        <Badge color={meta.color}>{meta.label}</Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge color={meta.color}>{meta.label}</Badge>
+          <SourceBadge source={note.source} />
+        </div>
         <span className="text-[11px] text-muted-2">{formatDate(note.updatedAt)}</span>
       </div>
 

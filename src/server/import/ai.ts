@@ -403,18 +403,26 @@ function mergeMetadata(plan: ImportPlan, meta: ExtractedMetadata): ImportPlan {
   };
 }
 
-type GeminiPart =
+export type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } };
 
 /**
- * Shared Gemini call: send `parts` as the user turn and validate the structured
- * JSON response into an ImportPlan. Backs both the text and PDF entry points.
+ * Low-level Gemini call: POST `parts` as the user turn under a structured-output
+ * schema and return the parsed JSON. Shared by the import pipeline (runGemini)
+ * and the KakaoTalk classifier (analyzeKakaoChat). Surfaces clean, status-based
+ * Korean errors; the caller validates/coerces the returned shape.
  */
-async function runGemini(
+export async function callGemini(
   parts: GeminiPart[],
-  fallbackTitle: string,
-): Promise<ImportPlan> {
+  opts: {
+    system: string;
+    schema: object;
+    maxOutputTokens?: number;
+    temperature?: number;
+    timeoutMs?: number;
+  },
+): Promise<unknown> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
   // gemini-2.0-flash는 서비스 종료(retired)됨. flash-latest 별칭이 최신 Flash를 가리킨다.
@@ -427,17 +435,16 @@ async function runGemini(
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM }] },
+          systemInstruction: { parts: [{ text: opts.system }] },
           contents: [{ role: "user", parts }],
           generationConfig: {
             responseMimeType: "application/json",
-            responseSchema: RESPONSE_SCHEMA,
+            responseSchema: opts.schema,
             // Flash 계열은 thinking 모델이라 사고 토큰까지 이 한도를 공유한다.
-            // 노트 + PMS(요구사항·WBS·작업) 구조화가 잘리지 않도록 넉넉히 준다.
-            maxOutputTokens: 32768,
-            temperature: 0.2,
+            maxOutputTokens: opts.maxOutputTokens ?? 32768,
+            temperature: opts.temperature ?? 0.2,
           },
         }),
       },
@@ -471,13 +478,28 @@ async function runGemini(
   const text: string | undefined = candidate?.content?.parts?.[0]?.text;
   if (!text) throw new Error("AI가 구조화 결과를 반환하지 않았습니다.");
 
-  let raw: RawPlan;
   try {
-    raw = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     console.error("[import/ai] JSON 파싱 실패:", text.slice(0, 500));
     throw new Error("AI 응답을 JSON으로 해석하지 못했습니다.");
   }
+}
+
+/**
+ * Shared Gemini call for the import pipeline: structure `parts` into an
+ * ImportPlan. Backs both the text and PDF entry points.
+ */
+async function runGemini(
+  parts: GeminiPart[],
+  fallbackTitle: string,
+): Promise<ImportPlan> {
+  const raw = (await callGemini(parts, {
+    system: SYSTEM,
+    schema: RESPONSE_SCHEMA,
+    maxOutputTokens: 32768,
+    temperature: 0.2,
+  })) as RawPlan;
   return coercePlan(raw, fallbackTitle);
 }
 
