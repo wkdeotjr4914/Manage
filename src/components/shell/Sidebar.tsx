@@ -2,48 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Network,
-  StickyNote,
-  Tags,
-  FolderKanban,
-  Upload,
-  MessageCircle,
-  Gavel,
-  Brain,
-  Users,
-  Plug,
-  Mail,
-  type LucideIcon,
-} from "lucide-react";
+import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-type NavItem = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  exact?: boolean;
-};
-
-const NAV: NavItem[] = [
-  { href: "/", label: "대시보드", icon: LayoutDashboard, exact: true },
-  { href: "/graph", label: "지식 그래프", icon: Network },
-  { href: "/notes", label: "노트", icon: StickyNote },
-  { href: "/tags", label: "태그 · 토픽", icon: Tags },
-  { href: "/projects", label: "프로젝트", icon: FolderKanban },
-  { href: "/bids", label: "입찰공고", icon: Gavel },
-  { href: "/mails", label: "수집 메일", icon: Mail },
-  { href: "/import", label: "가져오기", icon: Upload, exact: true },
-  { href: "/import/kakao", label: "카카오톡", icon: MessageCircle },
-  { href: "/settings/integrations", label: "연동", icon: Plug },
-];
-
-const ADMIN_NAV: NavItem = { href: "/admin/users", label: "사용자 관리", icon: Users };
+import { isNavActive, navItemsFor } from "./nav";
 
 export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
-  const items = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
+  const items = navItemsFor(isAdmin);
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-surface md:flex">
@@ -61,7 +26,7 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
 
       <nav className="flex flex-col gap-1 px-3 py-2">
         {items.map(({ href, label, icon: Icon, exact }) => {
-          const active = exact ? pathname === href : pathname.startsWith(href);
+          const active = isNavActive({ href, exact }, pathname);
           return (
             <Link
               key={href}

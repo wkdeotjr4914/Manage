@@ -23,6 +23,10 @@ npm run db:generate  # regenerate Prisma client into src/generated/prisma (run a
 npm run db:push      # push schema.prisma to the DB — THIS is the schema workflow (no migrations dir exists)
 npm run db:seed      # wipe + reseed sample knowledge/kanban data (does NOT seed PMS submenu tables)
 npm run db:clear     # empty all app tables (rows only; structure kept) — see scripts/clear.ts
+npm run db:clear:user            # 특정 계정만 남기고 전체 초기화 — 드라이런(삭제 예정 카운트만 출력)
+npm run db:clear:user -- --yes   # ↑ 실제 삭제(백업 후). 대상 기본값 wkdeotjr4914@gmail.com, 인자/KEEP_EMAIL로 변경
+#   유지: 대상 User·그 User의 GoogleAccount·Session, 전체 OAuthClientConfig, 대상 Workspace. 그 외 전부 삭제.
+#   백업 backups/backup-<시각>.json 자동 생성(SKIP_BACKUP=1로 생략). scripts/clear-except-user.ts
 npm run db:studio    # Prisma Studio
 npm run import:tips   # scripts/import-tips-meetings.ts — bulk-import sample markdown
 

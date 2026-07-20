@@ -5,6 +5,7 @@
 // 노출 엔드포인트:
 //   GET  /health            → {ok:true}
 //   POST /analyze           → 인증 필요. body {mailText, projectName} → {tasks:[...]}
+//   POST /analyze-kakao     → 인증 필요. body {chatText, projectNames} → {groups:[...]}
 //
 // 인증: Authorization: Bearer ${PROXY_API_KEY}
 //

@@ -11,6 +11,7 @@ import {
   Check,
   X,
   Sparkles,
+  Bot,
   ListTodo,
   ClipboardList,
   GitBranch,
@@ -24,14 +25,18 @@ import { cn } from "@/lib/utils";
 import {
   parseKakaoExport,
   chunkMessages,
+  messagesToText,
   groupToPlan,
+  buildKakaoGroups,
   KAKAO_MAX_CHUNKS,
+  KAKAO_AGENT_CHUNK_CHARS,
   type KakaoParseResult,
   type KakaoGroup,
   type KakaoTaskDraft,
   type KakaoRequirementDraft,
+  type KakaoRawGroup,
 } from "@/lib/kakao";
-import { analyzeKakaoChat } from "@/server/actions/kakao";
+import { analyzeKakaoChat, analyzeKakaoChunkViaHermes } from "@/server/actions/kakao";
 import { commitImport } from "@/server/actions/import";
 
 const NONE = "none"; // dropdown value for "연결 안 함"
@@ -76,22 +81,33 @@ function toEditable(g: KakaoGroup): EditableGroup {
 
 export function KakaoImportWorkbench({
   aiAvailable,
+  agentAvailable,
   projects,
 }: {
   aiAvailable: boolean;
+  agentAvailable: boolean;
   projects: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [analyzing, startAnalyze] = useTransition();
+  const [agentAnalyzing, startAgent] = useTransition();
   const [committing, startCommit] = useTransition();
 
   const [parsed, setParsed] = useState<KakaoParseResult | null>(null);
   const [fileName, setFileName] = useState("");
   const [groups, setGroups] = useState<EditableGroup[] | null>(null);
+  const [engine, setEngine] = useState<"gemini" | "agent" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CommitSummary | null>(null);
+
+  // Agent (Hermes) path: the client drives a per-chunk loop, so progress is its
+  // own state (not the transition's pending flag). agentSeq invalidates an
+  // in-flight loop when the file changes or the user re-runs.
+  const [agentProgress, setAgentProgress] = useState<{ done: number; total: number } | null>(null);
+  const agentSeq = useRef(0);
+  const busy = analyzing || agentAnalyzing;
 
   const chunkCount = useMemo(
     () =>
@@ -104,6 +120,9 @@ export function KakaoImportWorkbench({
   async function onFile(list: FileList | null) {
     const file = list?.[0];
     if (!file) return;
+    agentSeq.current++; // cancel any in-flight agent loop
+    setAgentProgress(null);
+    setEngine(null);
     setError(null);
     setNotice(null);
     setResult(null);
@@ -126,6 +145,8 @@ export function KakaoImportWorkbench({
 
   function analyze() {
     if (!parsed) return;
+    agentSeq.current++; // cancel any in-flight agent loop
+    setAgentProgress(null);
     setError(null);
     setNotice(null);
     startAnalyze(async () => {
@@ -137,6 +158,7 @@ export function KakaoImportWorkbench({
         setError(res.error);
         return;
       }
+      setEngine("gemini");
       if (!res.groups.length) {
         setGroups([]);
         setNotice("업무로 분류할 만한 내용을 찾지 못했습니다.");
@@ -148,6 +170,75 @@ export function KakaoImportWorkbench({
         msgs.push("대화가 매우 길어 앞부분 일부만 분석했습니다.");
       if (res.partialFailures > 0)
         msgs.push(`${res.partialFailures}개 구간은 분석에 실패해 건너뛰었습니다.`);
+      setNotice(msgs.join(" ") || null);
+    });
+  }
+
+  // Agent (Hermes) path: chunk client-side (smaller windows), then call the
+  // per-chunk server action sequentially, accumulating raw groups. Hermes is
+  // slow (~1분/청크) so this can run for many minutes; a Vercel function timeout
+  // surfaces as a thrown error → we stop and steer the user to Gemini.
+  function runAgent() {
+    if (!parsed) return;
+    agentSeq.current++;
+    const seq = agentSeq.current;
+    const chunks = chunkMessages(parsed.messages, KAKAO_AGENT_CHUNK_CHARS);
+    const truncated = chunks.length > KAKAO_MAX_CHUNKS;
+    const use = truncated ? chunks.slice(0, KAKAO_MAX_CHUNKS) : chunks;
+    setError(null);
+    setNotice(null);
+    setGroups(null);
+    setAgentProgress({ done: 0, total: use.length });
+    startAgent(async () => {
+      const allRaw: KakaoRawGroup[] = [];
+      let failures = 0;
+      let fatalError = false;
+      for (let i = 0; i < use.length; i++) {
+        if (seq !== agentSeq.current) return; // superseded/cancelled
+        try {
+          const res = await analyzeKakaoChunkViaHermes({
+            chatText: messagesToText(use[i]),
+          });
+          if (seq !== agentSeq.current) return;
+          if (res.ok) allRaw.push(...(res.groups as KakaoRawGroup[]));
+          else failures++;
+        } catch {
+          // The server action itself threw (most likely a Vercel function
+          // timeout ~504, or a network drop) — stop and steer to Gemini.
+          if (seq !== agentSeq.current) return;
+          fatalError = true;
+          break;
+        }
+        setAgentProgress({ done: i + 1, total: use.length });
+      }
+      if (seq !== agentSeq.current) return;
+      setAgentProgress(null);
+
+      if (fatalError) {
+        setError(
+          "에이전트(Hermes) 분석 중 오류가 발생했습니다(시간 초과 등). 위의 ‘AI로 프로젝트별 분류’(Gemini)로 분석해주세요.",
+        );
+        return;
+      }
+      if (failures === use.length) {
+        setError(
+          "에이전트 분석에 모두 실패했습니다. ‘AI로 프로젝트별 분류’(Gemini)로 분석해주세요.",
+        );
+        return;
+      }
+
+      const built = buildKakaoGroups(allRaw, projects);
+      setEngine("agent");
+      if (!built.length) {
+        setGroups([]);
+        setNotice("에이전트가 업무로 분류할 만한 내용을 찾지 못했습니다.");
+        return;
+      }
+      setGroups(built.map(toEditable));
+      const msgs: string[] = [];
+      if (truncated) msgs.push("대화가 매우 길어 앞부분 일부만 분석했습니다.");
+      if (failures > 0)
+        msgs.push(`${failures}개 구간은 분석에 실패해 건너뛰었습니다.`);
       setNotice(msgs.join(" ") || null);
     });
   }
@@ -293,6 +384,9 @@ export function KakaoImportWorkbench({
             </span>
             <button
               onClick={() => {
+                agentSeq.current++;
+                setAgentProgress(null);
+                setEngine(null);
                 setParsed(null);
                 setGroups(null);
                 setFileName("");
@@ -323,8 +417,8 @@ export function KakaoImportWorkbench({
             </span>
           </div>
 
-          <div className="mt-4 flex items-center gap-2">
-            <Button onClick={analyze} disabled={!aiAvailable || analyzing}>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button onClick={analyze} disabled={!aiAvailable || busy}>
               {analyzing ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -332,15 +426,38 @@ export function KakaoImportWorkbench({
               )}
               AI로 프로젝트별 분류
             </Button>
+            <Button
+              variant="secondary"
+              onClick={runAgent}
+              disabled={!agentAvailable || busy}
+            >
+              {agentAnalyzing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Bot className="size-4" />
+              )}
+              에이전트 분석
+            </Button>
             {analyzing && (
               <span className="text-xs text-muted-2">
                 {chunkCount}개 구간 분석 중… (길면 1~2분 걸릴 수 있어요)
+              </span>
+            )}
+            {agentAnalyzing && agentProgress && (
+              <span className="text-xs text-muted-2">
+                에이전트 분석 {agentProgress.done}/{agentProgress.total} 구간… (구간당
+                ~1분, 전체 수 분 소요 · 창을 닫으면 중단됩니다)
               </span>
             )}
           </div>
           {!aiAvailable && (
             <p className="mt-2 text-[11px] text-muted-2">
               AI 분류는 GEMINI_API_KEY 설정 시 켜집니다.
+            </p>
+          )}
+          {!agentAvailable && (
+            <p className="mt-1 text-[11px] text-muted-2">
+              에이전트 분석은 HERMES_PROXY_URL·HERMES_PROXY_KEY 설정 시 켜집니다.
             </p>
           )}
         </div>
@@ -366,6 +483,11 @@ export function KakaoImportWorkbench({
           <span className="text-xs text-muted-2">
             프로젝트를 확인/보정한 뒤 가져오세요.
           </span>
+          {engine && (
+            <Badge color={engine === "agent" ? "#a78bfa" : "#34d399"}>
+              {engine === "agent" ? "에이전트(Hermes)" : "Gemini"} 결과
+            </Badge>
+          )}
         </div>
       )}
 

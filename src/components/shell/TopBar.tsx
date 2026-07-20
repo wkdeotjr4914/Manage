@@ -1,24 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Network,
-  StickyNote,
-  Tags,
-  FolderKanban,
-  Upload,
-  Brain,
-  Search,
-  Bell,
-  LogOut,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Brain, Search, Bell, LogOut, Menu } from "lucide-react";
 import { logout } from "@/server/actions/auth";
 import { ThemeToggle } from "./ThemeToggle";
+import { MobileNav } from "./MobileNav";
+import { navItemsFor } from "./nav";
 
 type TopBarUser = {
   name: string | null;
@@ -26,35 +14,30 @@ type TopBarUser = {
   role: "MEMBER" | "ADMIN";
 };
 
-type NavItem = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  exact?: boolean;
-};
-
-const NAV: NavItem[] = [
-  { href: "/", label: "대시보드", icon: LayoutDashboard, exact: true },
-  { href: "/graph", label: "그래프", icon: Network },
-  { href: "/notes", label: "노트", icon: StickyNote },
-  { href: "/tags", label: "태그", icon: Tags },
-  { href: "/projects", label: "프로젝트", icon: FolderKanban },
-  { href: "/import", label: "가져오기", icon: Upload },
-];
-
-const ADMIN_NAV: NavItem = { href: "/admin/users", label: "사용자 관리", icon: Users };
-
 /** Top header shown on every breakpoint: search + theme toggle + profile.
-    On mobile it also carries the primary nav (the sidebar is desktop-only). */
+    On mobile it also carries the primary nav via a hamburger + slide-out
+    drawer (the sidebar is desktop-only). */
 export function TopBar({ user }: { user: TopBarUser }) {
-  const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
   const displayName = user.name ?? user.email;
   const initial = displayName.charAt(0).toUpperCase();
   const roleLabel = user.role === "ADMIN" ? "관리자" : "멤버";
-  const navItems = user.role === "ADMIN" ? [...NAV, ADMIN_NAV] : NAV;
+  const navItems = navItemsFor(user.role === "ADMIN");
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface/95 backdrop-blur-md">
       <div className="flex items-center gap-3 px-3 py-2.5 sm:px-6 sm:py-3">
+        {/* mobile: hamburger opens the nav drawer (desktop uses the sidebar) */}
+        <button
+          type="button"
+          aria-label="메뉴 열기"
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen(true)}
+          className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-surface-2 text-muted transition-colors hover:bg-surface-3 hover:text-foreground md:hidden"
+        >
+          <Menu className="size-4.5" />
+        </button>
+
         {/* mobile logo (desktop shows it in the sidebar) */}
         <Link href="/" className="flex items-center gap-2 md:hidden">
           <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
@@ -108,27 +91,11 @@ export function TopBar({ user }: { user: TopBarUser }) {
         </div>
       </div>
 
-      {/* mobile primary nav */}
-      <nav className="flex items-center gap-1 overflow-x-auto px-3 pb-2 md:hidden">
-        {navItems.map(({ href, label, icon: Icon, exact }) => {
-          const active = exact ? pathname === href : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                active
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted hover:bg-surface-2 hover:text-foreground",
-              )}
-            >
-              <Icon className="size-3.5" />
-              {label}
-            </Link>
-          );
-        })}
-      </nav>
+      <MobileNav
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        items={navItems}
+      />
     </header>
   );
 }

@@ -47,3 +47,37 @@ export async function analyzeMailViaProxy(
   }
   return Array.isArray(data.tasks) ? data.tasks : [];
 }
+
+/** 프록시 /analyze-kakao 호출. 카카오 대화 청크 1개 → 프로젝트별 원시 groups 배열
+ *  (정규화·머지·매칭은 호출측 buildKakaoGroups). 카카오는 잡담 청크가 정당하게 빈 결과를
+ *  낼 수 있어 프록시는 파싱 실패 시에만 재시도하며, Hermes가 청크당 수십 초 걸리므로
+ *  타임아웃을 넉넉히 둔다(클라이언트가 청크별로 이 액션을 순차 호출한다). */
+export async function analyzeKakaoChunkViaProxy(
+  chatText: string,
+  projectNames: string[],
+): Promise<unknown[]> {
+  const url = proxyUrl();
+  const key = proxyKey();
+  if (!url || !key) {
+    throw new Error("HERMES_PROXY_URL·HERMES_PROXY_KEY 가 설정되지 않았습니다.");
+  }
+  const res = await fetch(`${url.replace(/\/$/, "")}/analyze-kakao`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({ chatText, projectNames }),
+    signal: AbortSignal.timeout(150_000),
+  });
+  const data = (await res.json().catch(() => null)) as
+    | { ok: true; groups: unknown[] }
+    | { ok: false; error: string }
+    | null;
+  if (!res.ok || !data || data.ok !== true) {
+    const msg =
+      data && data.ok === false ? data.error : `에이전트 프록시 오류(${res.status}).`;
+    throw new Error(msg);
+  }
+  return Array.isArray(data.groups) ? data.groups : [];
+}

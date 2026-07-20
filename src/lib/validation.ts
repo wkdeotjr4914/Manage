@@ -88,6 +88,24 @@ export type NoteInput = z.infer<typeof noteSchema>;
 export type EdgeInput = z.infer<typeof edgeSchema>;
 export type TaskInput = z.infer<typeof taskSchema>;
 
+// 회사 프로필(입찰 적합도 판정 기준). 모든 서술 필드는 선택 — 비어 있으면
+// 기본 프로필(DEFAULT_COMPANY_PROFILE)로 폴백한다. avoidKeywords는 공백 제거·
+// 중복 제거 후 저장한다.
+export const companyProfileSchema = z.object({
+  businessArea: z.string().trim().max(300).optional().default(""),
+  strengths: z.string().trim().max(4000).optional().default(""),
+  preferred: z.string().trim().max(500).optional().default(""),
+  avoided: z.string().trim().max(1000).optional().default(""),
+  extraNotes: z.string().trim().max(4000).optional().default(""),
+  avoidKeywords: z
+    .array(z.string().trim())
+    .optional()
+    .default([])
+    .transform((arr) => [...new Set(arr.map((s) => s.trim()).filter(Boolean))].slice(0, 60)),
+});
+
+export type CompanyProfileInput = z.infer<typeof companyProfileSchema>;
+
 // ----------------------------------------------------------------------------
 // Auth
 // ----------------------------------------------------------------------------

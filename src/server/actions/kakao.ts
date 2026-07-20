@@ -1,32 +1,33 @@
 "use server";
 
-// AI classification for the KakaoTalk import page. Takes the parsed messages of
-// one chat export, chunks them, and asks Gemini (per chunk) to sort real work
-// into project groups matched against existing Project names. The client then
-// commits each group through the existing `commitImport` pipeline.
+// AI classification for the KakaoTalk import page. Two engines feed the SAME
+// merge/match builder (`buildKakaoGroups` in @/lib/kakao):
+//  - Gemini  — `analyzeKakaoChat` chunks the whole conversation and calls Gemini
+//    per chunk sequentially (server-side loop), then builds the groups.
+//  - Hermes agent — `analyzeKakaoChunkViaHermes` analyzes ONE chunk through the
+//    narrow proxy. Hermes is slow (~70s/18KB chunk), so the CLIENT drives the
+//    per-chunk loop (keeping each serverless call short) and calls
+//    `buildKakaoGroups` on the accumulated raw groups itself.
 
 import { prisma } from "@/server/db";
 import { getScope } from "@/server/auth";
 import { isAiAvailable, callGemini } from "@/server/import/ai";
 import {
+  isHermesProxyAvailable,
+  analyzeKakaoChunkViaProxy,
+} from "@/server/agent/hermesProxy";
+import {
   chunkMessages,
   messagesToText,
+  buildKakaoGroups,
   KAKAO_MAX_CHUNKS,
   type KakaoMessage,
-  type KakaoGroup,
-  type KakaoTaskDraft,
+  type KakaoRawGroup,
   type AnalyzeKakaoResult,
 } from "@/lib/kakao";
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from "@/lib/validation";
 
 const UNASSIGNED = "미분류";
-
-type RawGroup = {
-  projectName?: unknown;
-  summary?: unknown;
-  tasks?: Array<Record<string, unknown>>;
-  requirements?: Array<Record<string, unknown>>;
-};
 
 // Gemini structured-output schema for one chunk. Types are UPPER-CASE per the
 // generativelanguage v1beta contract (see src/server/import/ai.ts).
@@ -99,110 +100,6 @@ function systemPrompt(projectNames: string[]): string {
 ${list}`;
 }
 
-// ---- small coercers (mirror src/server/import/ai.ts) ----
-
-function str(v: unknown): string | undefined {
-  if (v == null) return undefined;
-  const s = String(v).trim();
-  return s || undefined;
-}
-
-function norm(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, "");
-}
-
-function coerceStatus(v: unknown): KakaoTaskDraft["status"] {
-  return (TASK_STATUS_VALUES as readonly string[]).includes(v as string)
-    ? (v as KakaoTaskDraft["status"])
-    : "TODO";
-}
-
-function coercePriority(v: unknown): KakaoTaskDraft["priority"] {
-  return (TASK_PRIORITY_VALUES as readonly string[]).includes(v as string)
-    ? (v as KakaoTaskDraft["priority"])
-    : "MEDIUM";
-}
-
-function toISODate(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const m = v.trim().match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
-  return m ? `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}` : undefined;
-}
-
-// Fold one chunk's group into the running accumulator, deduping tasks by title
-// and requirements by name (normalized).
-function mergeGroup(
-  g: RawGroup,
-  byKey: Map<string, KakaoGroup>,
-  taskSeen: Map<string, Set<string>>,
-  reqSeen: Map<string, Set<string>>,
-) {
-  const name = str(g.projectName) || UNASSIGNED;
-  const key = norm(name);
-  let group = byKey.get(key);
-  if (!group) {
-    group = { projectName: name, projectId: null, summary: "", tasks: [], requirements: [] };
-    byKey.set(key, group);
-    taskSeen.set(key, new Set());
-    reqSeen.set(key, new Set());
-  }
-  const ts = taskSeen.get(key)!;
-  const rs = reqSeen.get(key)!;
-
-  const summary = str(g.summary);
-  if (summary) group.summary = group.summary ? `${group.summary}\n${summary}` : summary;
-
-  for (const t of g.tasks ?? []) {
-    const title = str(t.title);
-    if (!title) continue;
-    const k = norm(title);
-    if (ts.has(k)) continue;
-    ts.add(k);
-    group.tasks.push({
-      title,
-      status: coerceStatus(t.status),
-      priority: coercePriority(t.priority),
-      description: str(t.description),
-    });
-  }
-
-  for (const r of g.requirements ?? []) {
-    const rname = str(r.name);
-    if (!rname) continue;
-    const k = norm(rname);
-    if (rs.has(k)) continue;
-    rs.add(k);
-    group.requirements.push({
-      name: rname,
-      category: str(r.category),
-      detail: str(r.detail),
-      acceptance: str(r.acceptance),
-      requestDate: toISODate(r.requestDate),
-      dueDate: toISODate(r.dueDate),
-      targetDate: toISODate(r.targetDate),
-    });
-  }
-}
-
-// Match an AI-emitted project name to an existing project id (exact normalized,
-// then containment either way). "미분류" and no-match stay null.
-function matchProject(
-  name: string,
-  projects: { id: string; name: string }[],
-): string | null {
-  if (name === UNASSIGNED) return null;
-  const n = norm(name);
-  const exact = projects.find((p) => norm(p.name) === n);
-  if (exact) return exact.id;
-  // Fall back to containment, but only auto-assign when exactly one project
-  // matches — an ambiguous match is left null for the user to resolve.
-  const partials = projects.filter((p) => {
-    const pn = norm(p.name);
-    return pn.length >= 2 && (n.includes(pn) || pn.includes(n));
-  });
-  return partials.length === 1 ? partials[0].id : null;
-}
-
 export async function analyzeKakaoChat(input: {
   messages: KakaoMessage[];
   roomName: string;
@@ -233,13 +130,10 @@ export async function analyzeKakaoChat(input: {
   const truncated = allChunks.length > KAKAO_MAX_CHUNKS;
   const chunks = truncated ? allChunks.slice(0, KAKAO_MAX_CHUNKS) : allChunks;
 
-  const byKey = new Map<string, KakaoGroup>();
-  const taskSeen = new Map<string, Set<string>>();
-  const reqSeen = new Map<string, Set<string>>();
-  let partialFailures = 0;
-
   // Sequential: Gemini free/low tiers 429 easily and 60s-per-call parallelism
   // wouldn't shorten wall-clock meaningfully. One failed chunk is skipped.
+  const allRaw: KakaoRawGroup[] = [];
+  let partialFailures = 0;
   for (const chunk of chunks) {
     let raw: unknown;
     try {
@@ -256,26 +150,63 @@ export async function analyzeKakaoChat(input: {
       partialFailures++;
       continue;
     }
-    const groups = (raw as { groups?: RawGroup[] })?.groups ?? [];
-    for (const g of groups) mergeGroup(g, byKey, taskSeen, reqSeen);
+    const groups = (raw as { groups?: KakaoRawGroup[] })?.groups ?? [];
+    allRaw.push(...groups);
   }
 
-  const groups = [...byKey.values()];
-  for (const g of groups) g.projectId = matchProject(g.projectName, projects);
-
-  // Matched projects first, 미분류 last; within each, richer groups first.
-  groups.sort((a, b) => {
-    const au = a.projectName === UNASSIGNED ? 1 : 0;
-    const bu = b.projectName === UNASSIGNED ? 1 : 0;
-    if (au !== bu) return au - bu;
-    return (
-      b.tasks.length + b.requirements.length - (a.tasks.length + a.requirements.length)
-    );
-  });
+  const groups = buildKakaoGroups(allRaw, projects);
 
   if (!groups.length && partialFailures === chunks.length) {
     return { ok: false, error: "AI 분석에 모두 실패했습니다. 잠시 후 다시 시도하세요." };
   }
 
   return { ok: true, groups, partialFailures, truncated };
+}
+
+/**
+ * Analyze ONE conversation chunk through the Hermes proxy and return its RAW
+ * groups (no merge/match). The client loops over chunks, accumulates the raw
+ * groups, and runs `buildKakaoGroups` once at the end — this keeps each
+ * serverless invocation to a single ~70s proxy round-trip. The project name
+ * list (for the prompt) is derived server-side from the scoped projects.
+ */
+export async function analyzeKakaoChunkViaHermes(input: {
+  chatText: string;
+}): Promise<{ ok: true; groups: KakaoRawGroup[] } | { ok: false; error: string }> {
+  if (!isHermesProxyAvailable()) {
+    return {
+      ok: false,
+      error: "에이전트 연동(HERMES_PROXY_URL·HERMES_PROXY_KEY)이 설정되지 않았습니다.",
+    };
+  }
+  const chatText = typeof input?.chatText === "string" ? input.chatText : "";
+  if (!chatText.trim()) {
+    return { ok: false, error: "분석할 대화가 없습니다." };
+  }
+  // Server-side guard mirroring the client chunk size (the proxy also caps at
+  // 60KB) so a direct action call can't push an oversized body at Hermes.
+  if (chatText.length > 60000) {
+    return { ok: false, error: "청크가 너무 큽니다(6만 자 초과)." };
+  }
+
+  const scope = await getScope();
+  const projects = await prisma.project.findMany({
+    where: scope.where,
+    select: { name: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  try {
+    const groups = await analyzeKakaoChunkViaProxy(
+      chatText,
+      projects.map((p) => p.name),
+    );
+    return { ok: true, groups: groups as KakaoRawGroup[] };
+  } catch (e) {
+    console.error("[actions/kakao] 에이전트(프록시) 청크 분석 실패:", e);
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "에이전트 분석에 실패했습니다.",
+    };
+  }
 }

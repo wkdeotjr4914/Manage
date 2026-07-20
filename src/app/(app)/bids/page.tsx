@@ -30,6 +30,9 @@ export default async function BidsPage() {
     bidNtceDtlUrl: b.bidNtceDtlUrl,
     matchedKeywords: b.matchedKeywords,
     status: b.status,
+    fitScore: b.fitScore,
+    fitReason: b.fitReason,
+    fitRecommend: b.fitRecommend,
     closed: b.bidClseDt ? b.bidClseDt.getTime() < nowMs : false,
   }));
 

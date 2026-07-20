@@ -199,6 +199,10 @@ export function parseKakaoExport(raw: string): KakaoParseResult {
 // use large windows to keep the number of sequential calls low; the classifier
 // only emits compact work items, so output stays well within the token budget.
 export const KAKAO_CHUNK_CHARS = 45000;
+// Smaller windows for the Hermes agent path: Hermes is much slower than Gemini
+// (~70s per ~18KB window), so smaller chunks keep each proxy round-trip under the
+// serverless function ceiling while the client drives them one at a time.
+export const KAKAO_AGENT_CHUNK_CHARS = 18000;
 // Hard cap on windows so a multi-year chat can't fan out into endless API calls.
 export const KAKAO_MAX_CHUNKS = 20;
 
@@ -240,16 +244,146 @@ export function chunkMessages(
 
 const UNASSIGNED = "미분류";
 
-function coerceStatus(v: string): TaskStatusKey {
-  return (TASK_STATUS_VALUES as readonly string[]).includes(v)
+// Accept `unknown` so both the (typed) groupToPlan path and the (raw AI/agent
+// output) merge path can share these — invalid values fall back to a default.
+function coerceStatus(v: unknown): TaskStatusKey {
+  return typeof v === "string" && (TASK_STATUS_VALUES as readonly string[]).includes(v)
     ? (v as TaskStatusKey)
     : "TODO";
 }
 
-function coercePriority(v: string): TaskPriorityKey {
-  return (TASK_PRIORITY_VALUES as readonly string[]).includes(v)
+function coercePriority(v: unknown): TaskPriorityKey {
+  return typeof v === "string" && (TASK_PRIORITY_VALUES as readonly string[]).includes(v)
     ? (v as TaskPriorityKey)
     : "MEDIUM";
+}
+
+function str(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  return s || undefined;
+}
+
+function norm(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function toISODate(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const m = v.trim().match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
+  return m ? `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}` : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Raw AI/agent chunk output → merged, project-matched groups
+// ---------------------------------------------------------------------------
+
+// One group as emitted by Gemini or the Hermes agent for a single chunk, before
+// merge/dedup/project-matching. Shared so both engines feed the same builder.
+export type KakaoRawGroup = {
+  projectName?: unknown;
+  summary?: unknown;
+  tasks?: Array<Record<string, unknown>>;
+  requirements?: Array<Record<string, unknown>>;
+};
+
+// Fold one chunk's group into the running accumulator, deduping tasks by title
+// and requirements by name (normalized), concatenating summaries.
+function mergeGroupInto(
+  g: KakaoRawGroup,
+  byKey: Map<string, KakaoGroup>,
+  taskSeen: Map<string, Set<string>>,
+  reqSeen: Map<string, Set<string>>,
+) {
+  const name = str(g.projectName) || UNASSIGNED;
+  const key = norm(name);
+  let group = byKey.get(key);
+  if (!group) {
+    group = { projectName: name, projectId: null, summary: "", tasks: [], requirements: [] };
+    byKey.set(key, group);
+    taskSeen.set(key, new Set());
+    reqSeen.set(key, new Set());
+  }
+  const ts = taskSeen.get(key)!;
+  const rs = reqSeen.get(key)!;
+
+  const summary = str(g.summary);
+  if (summary) group.summary = group.summary ? `${group.summary}\n${summary}` : summary;
+
+  for (const t of g.tasks ?? []) {
+    const title = str(t.title);
+    if (!title) continue;
+    const k = norm(title);
+    if (ts.has(k)) continue;
+    ts.add(k);
+    group.tasks.push({
+      title,
+      status: coerceStatus(t.status),
+      priority: coercePriority(t.priority),
+      description: str(t.description),
+    });
+  }
+
+  for (const r of g.requirements ?? []) {
+    const rname = str(r.name);
+    if (!rname) continue;
+    const k = norm(rname);
+    if (rs.has(k)) continue;
+    rs.add(k);
+    group.requirements.push({
+      name: rname,
+      category: str(r.category),
+      detail: str(r.detail),
+      acceptance: str(r.acceptance),
+      requestDate: toISODate(r.requestDate),
+      dueDate: toISODate(r.dueDate),
+      targetDate: toISODate(r.targetDate),
+    });
+  }
+}
+
+// Match an AI-emitted project name to an existing project id (exact normalized,
+// then containment when exactly one project matches). "미분류"/no-match stay null.
+function matchProjectId(
+  name: string,
+  projects: { id: string; name: string }[],
+): string | null {
+  if (name === UNASSIGNED) return null;
+  const n = norm(name);
+  const exact = projects.find((p) => norm(p.name) === n);
+  if (exact) return exact.id;
+  const partials = projects.filter((p) => {
+    const pn = norm(p.name);
+    return pn.length >= 2 && (n.includes(pn) || pn.includes(n));
+  });
+  return partials.length === 1 ? partials[0].id : null;
+}
+
+/** Merge all raw chunk groups (from any engine, in chunk order) into deduped,
+ *  project-matched, sorted groups. Pure — shared by the Gemini server action
+ *  and the client-driven Hermes agent path. */
+export function buildKakaoGroups(
+  rawGroups: KakaoRawGroup[],
+  projects: { id: string; name: string }[],
+): KakaoGroup[] {
+  const byKey = new Map<string, KakaoGroup>();
+  const taskSeen = new Map<string, Set<string>>();
+  const reqSeen = new Map<string, Set<string>>();
+  for (const g of rawGroups) mergeGroupInto(g, byKey, taskSeen, reqSeen);
+
+  const groups = [...byKey.values()];
+  for (const g of groups) g.projectId = matchProjectId(g.projectName, projects);
+
+  // Matched projects first, 미분류 last; within each, richer groups first.
+  groups.sort((a, b) => {
+    const au = a.projectName === UNASSIGNED ? 1 : 0;
+    const bu = b.projectName === UNASSIGNED ? 1 : 0;
+    if (au !== bu) return au - bu;
+    return (
+      b.tasks.length + b.requirements.length - (a.tasks.length + a.requirements.length)
+    );
+  });
+  return groups;
 }
 
 /** Build an ImportPlan for one project group. `commitImport` then writes the

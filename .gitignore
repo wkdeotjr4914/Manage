@@ -44,3 +44,6 @@ next-env.d.ts
 
 # 생성물(비밀 임베드) — 커밋 금지, hermes-proxy/gen-compose.mjs로 재생성
 hermes-proxy/compose.deploy.yml
+
+# DB 백업(암호화 토큰 등 포함) — 커밋 금지, db:clear:user가 생성
+/backups

@@ -501,6 +501,13 @@ model BidNotice {
   status          BidStatus @default(NEW)
   memo            String? // 사내 메모
 
+  // AI 적합도 판정(CompanyProfile 기준). 수집 직후 자동 산출. 재수집해도 status/memo처럼
+  // 사용자·이전 판정은 보존(collectBids update 절에 넣지 않음). null이면 미판정.
+  fitScore     Int? // 0~100 적합도(높을수록 회사 특성과 부합)
+  fitReason    String? // 판정 근거(한 줄)
+  fitRecommend Boolean? // 추천 여부(대략 fitScore>=70)
+  fitAt        DateTime? // 판정 시각
+
   raw Json? // 원본 응답 아이템(디버깅/필드 보강용)
 
   collectedAt DateTime @default(now())
@@ -511,6 +518,30 @@ model BidNotice {
   @@index([status])
   @@index([bidClseDt])
   @@index([bidNtceDt])
+  @@index([fitScore])
+}
+
+// ----------------------------------------------------------------------------
+// 회사 프로필 — 입찰공고 AI 적합도 판정의 단일 기준(SSOT). 워크스페이스당 1개라
+// 싱글턴(id는 고정 "default")으로 두고 설정 화면(/settings/company)에서 ADMIN이 편집.
+// profile* 필드는 Gemini systemInstruction에 주입되고, avoidKeywords는 AI 호출 전
+// 프리필터(제목에 기피어가 있으면 자동 저점)로 토큰을 아낀다. OAuthClientConfig와
+// 같은 고정 id 싱글턴 패턴.
+// ----------------------------------------------------------------------------
+model CompanyProfile {
+  id String @id @default("default")
+
+  businessArea String? // 사업영역(한 줄)
+  strengths    String? // 주력 기술·역량(여러 줄)
+  preferred    String? // 선호 사업유형
+  avoided      String? // 기피 조건(서술)
+  extraNotes   String? // 규모·실적·보유자격 등 자유 서술
+
+  avoidKeywords String[] // 네거티브 키워드 — 공고명에 있으면 프리필터에서 저점 처리
+
+  updatedBy String? // 마지막 수정 userId
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ----------------------------------------------------------------------------
